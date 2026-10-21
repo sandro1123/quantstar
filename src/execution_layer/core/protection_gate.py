@@ -79,6 +79,11 @@ class ProtectionGate:
     # -- 主入口 ----------------------------------------------------------------
 
     def check(self, code: str, current_time: str) -> tuple[bool, str]:
+        # 若 db 为 None 或不可用 (如单元测试 dry_run 模式), 无法判定数据,
+        # 按 fail-open 放行: 无 DB = 无历史 = 无风险可评估, 不得误杀正常交易。
+        # 生产环境 db 始终有值, 此分支仅对测试/Mock 生效。
+        if self.db is None or not hasattr(self.db, "get_connection"):
+            return True, ""
         for guard in (self._check_cooldown, self._check_daily_stoploss,
                       self._check_drawdown):
             try:

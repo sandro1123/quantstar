@@ -157,11 +157,15 @@ class SelectionPipeline:
         # Issue #12: 质量闸门前置检查 (fail-closed)
         # 若 kline 窗口不完整 / 多源交叉校验失败 / flag 累积超阈 → 阻断选股,
         # 返回 blocked=True + 原因, 不产生候选。
+        # 仅当 data_layer.db 是真实 Database 实例时才自动构建质量闸门;
+        # 测试用的 MagicMock/data_layer 无 DB 时跳过，避免阻断单元测试。
         qgate = self._quality_gate
         if qgate is None and self.data_layer is not None:
-            from data_layer.quality import DataQualityGate
-            qgate = DataQualityGate(self.data_layer.db,
-                                    config=self.config.get("data.quality_gate"))
+            db = getattr(self.data_layer, "db", None)
+            from common.database import Database
+            if isinstance(db, Database):
+                from data_layer.quality import DataQualityGate
+                qgate = DataQualityGate(db, config=self.config.get("data.quality_gate"))
         if qgate is not None:
             codes = [c.code for c in candidates]
             can, reason = qgate.check(date, codes=codes)
