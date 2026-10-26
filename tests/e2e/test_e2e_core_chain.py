@@ -89,7 +89,7 @@ class TestE2ECoreChain:
             {"code": "000001", "signal": "hold", "date": "2026-07-19"},
             {"code": "000001", "signal": "sell", "date": "2026-07-20"},
         ]
-        price_data = {"000001": [10.0, 10.5, 10.8]}
+        price_data = {"000001": {"2026-07-17": 10.0, DATE: 10.0, "2026-07-19": 10.5, "2026-07-20": 10.8}}
         result = mode.run(signals, price_data)
 
         assert result["mode"] == "signal"

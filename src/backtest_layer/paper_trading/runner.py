@@ -469,6 +469,15 @@ class PaperTradingRunner:
                     "reason": f"运行 {days} 天 < {GRADUATION_MIN_DAYS} 天", "days": days}
         if paper_sharpe is None:
             return {"decision": "continue", "reason": "纸交易 Sharpe 不可算", "days": days}
+        # 审计 M-2: 回测 Sharpe 非正时阈值也非正, 小幅亏损的纸盘会被判毕业 → 一律继续
+        if backtest_sharpe is None or backtest_sharpe <= 0:
+            return {"decision": "continue",
+                    "reason": f"回测 Sharpe {backtest_sharpe} 非正, 无可比基准, 不建议毕业",
+                    "days": days, "paper_sharpe": paper_sharpe}
+        if paper_sharpe <= 0:
+            return {"decision": "continue",
+                    "reason": f"纸交易 Sharpe {paper_sharpe:.2f} 非正",
+                    "days": days, "paper_sharpe": paper_sharpe}
         threshold = backtest_sharpe * GRADUATION_SHARPE_RATIO
         if paper_sharpe > threshold:
             return {"decision": "graduate",

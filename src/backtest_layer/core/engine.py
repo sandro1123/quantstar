@@ -90,7 +90,11 @@ class BacktestEngine:
                 input.strategy_params.get("price_data", {}),
             )
             equity_curve = result.get("equity_curve", [])
-            nav_series = [equity_curve[0]] if isinstance(equity_curve[0], float) else [e.get("nav", e) for e in equity_curve] if equity_curve else []
+            # 修复: 旧写法 float 列表只取第一个点 (Sharpe/回撤恒为 0), 空列表 IndexError
+            nav_series = [
+                float(e.get("nav", 0.0)) if isinstance(e, dict) else float(e)
+                for e in equity_curve
+            ]
             if not nav_series:
                 nav_series = [self.cost.initial_capital, result["final_nav"]]
             # BT-06: SQN 用每笔交易 pnl 真算 (无 trade_log 时 Metrics.calc 内标 None)
