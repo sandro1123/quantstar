@@ -7,8 +7,6 @@ QuantStar 是一个面向 A 股市场的量化选股与多智能体（Multi-Agen
 [![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CI Pipeline](https://github.com/sandro1123/quantstar/actions/workflows/ci.yml/badge.svg)](https://github.com/sandro1123/quantstar/actions/workflows/ci.yml)
-[![Tests Passing](https://img.shields.io/badge/Tests-6021%20Passing-brightgreen.svg)]()
-[![Security Clean](https://img.shields.io/badge/Gitleaks-0%20Leak-success.svg)]()
 [![Release](https://img.shields.io/badge/Release-v0.20.0--beta.1-orange.svg)](https://github.com/sandro1123/quantstar/releases/tag/v0.20.0-beta.1)
 
 ---

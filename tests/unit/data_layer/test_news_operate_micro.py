@@ -1,4 +1,4 @@
-"""AG-NEWS 运营季三 GO 微卡 (sm-ecd400e): T1 误桶修法 + links 第二遍扫描.
+r"""AG-NEWS 运营季三 GO 微卡 (sm-ecd400e): T1 误桶修法 + links 第二遍扫描.
 
 三 GO:
   ② T1 误桶修法: 词表补「中报/年报快讯/净利为」+ 个股 code 前缀正则

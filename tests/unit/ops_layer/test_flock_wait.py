@@ -21,13 +21,13 @@ GUARD = REPO_ROOT / "scripts" / "flock_guard.sh"
 
 @pytest.fixture()
 def env(tmp_path):
-    """隔离环境: 临时锁文件 + 临时 ops.yaml + 临时 watchdog.jsonl。"""
-    lock_dir = tmp_path / "locks"
-    lock_dir.mkdir()
-    # Ensure worktree locks dir exists for holder subprocess
-    import pathlib
-    repo_locks = pathlib.Path(__file__).resolve().parents[3] / "locks"
-    repo_locks.mkdir(exist_ok=True)
+    """隔离环境: 临时锁文件 + 临时 ops.yaml + 临时 watchdog.jsonl。
+
+    锁文件通过 QS_LOCK_FILE 指向 tmp_path, 绝不触碰仓库/生产的 locks/qs_db_write.lock
+    (旧实现在每个测试前对生产锁执行 fuser -k, 在生产机上跑测试会杀掉持锁管道)。
+    """
+    lock = tmp_path / "locks" / "qs_db_write.lock"
+    lock.parent.mkdir()
     log = tmp_path / "watchdog.jsonl"
     ops = tmp_path / "ops.yaml"
 
@@ -43,27 +43,20 @@ def env(tmp_path):
     env = os.environ.copy()
     env["QS_OPS_YAML"] = str(ops)
     env["QS_WATCHDOG_LOG"] = str(log)
-    # flock_guard 用 BASH_SOURCE 派生 ROOT → 锁文件在 REPO_ROOT/locks。
-    # 测试不 mock 锁路径, 直接用生产锁路径的语义但通过子进程隔离:
-    # 这里改为断言事件文件内容, 锁竞争用真实 REPO_ROOT/locks (测试时段无 cron 运行)。
-    return {"env": env, "log": log, "make_ops": make_ops, "tmp": tmp_path}
+    env["QS_LOCK_FILE"] = str(lock)
+    holders: list[subprocess.Popen] = []
+    yield {"env": env, "log": log, "make_ops": make_ops, "tmp": tmp_path,
+           "lock": lock, "holders": holders}
+    for h in holders:  # 只清理本测试自己起的持锁子进程
+        if h.poll() is None:
+            h.kill()
+            h.wait(timeout=5)
 
 
-@pytest.fixture(autouse=True)
-def _ensure_lock_free():
-    """每个测试前确保生产锁空闲 (前一测试 holder 子进程可能残留持锁)。"""
-    import subprocess as _sp
-    lock = REPO_ROOT / "locks" / "qs_db_write.lock"
-    lock.parent.mkdir(exist_ok=True)
-    # 杀掉残留持锁进程
-    _sp.run(["bash", "-c", f"fuser -k {lock} 2>/dev/null; true"], capture_output=True)
-    # 等锁真正空闲 (最多 5s)
-    for _ in range(50):
-        r = _sp.run(["flock", "-n", str(lock), "true"], capture_output=True)
-        if r.returncode == 0:
-            break
-        time.sleep(0.1)
-    yield
+def hold_lock(env, seconds):
+    h = subprocess.Popen(["flock", str(env["lock"]), "sleep", str(seconds)])
+    env["holders"].append(h)
+    return h
 
 
 def run_guard(key, env, extra_args=None, timeout=30):
@@ -84,8 +77,7 @@ class TestNonBlockingDefault:
         """RED→GREEN: 无 wait_timeout_s 键遇锁 → exit 99 + skipped_lock, 不等待。"""
         env["make_ops"]({"plain_job": None})  # 无 wait_timeout_s
         # 占锁: 后台 flock 持锁 5s
-        holder = subprocess.Popen(
-            ["bash", "-c", f"flock {REPO_ROOT}/locks/qs_db_write.lock sleep 5"])
+        holder = hold_lock(env, 5)
         time.sleep(0.3)
         t0 = time.time()
         r = run_guard("plain_job", env)
@@ -104,8 +96,7 @@ class TestWaitMode:
     def test_wait_then_acquire(self, env):
         """负向对照1: ddp 持锁→午后作业等待→ddp 放锁→获锁执行。"""
         env["make_ops"]({"afternoon_job": 10})
-        holder = subprocess.Popen(
-            ["bash", "-c", f"flock {REPO_ROOT}/locks/qs_db_write.lock sleep 2"])
+        holder = hold_lock(env, 2)
         time.sleep(0.3)
         r = run_guard("afternoon_job", env, timeout=20)
         holder.wait()
@@ -117,8 +108,7 @@ class TestWaitMode:
     def test_wait_timeout_exits_99(self, env):
         """负向对照2: ddp 失败(watchdog 杀)→午后作业等到超时→exit 99 不挂死。"""
         env["make_ops"]({"afternoon_job": 2})
-        holder = subprocess.Popen(
-            ["bash", "-c", f"flock {REPO_ROOT}/locks/qs_db_write.lock sleep 30"])
+        holder = hold_lock(env, 30)
         time.sleep(0.3)
         t0 = time.time()
         r = run_guard("afternoon_job", env, timeout=15)
@@ -143,8 +133,7 @@ class TestObservability:
 
     def test_waited_lock_fields(self, env):
         env["make_ops"]({"afternoon_job": 2})
-        holder = subprocess.Popen(
-            ["bash", "-c", f"flock {REPO_ROOT}/locks/qs_db_write.lock sleep 5"])
+        holder = hold_lock(env, 5)
         time.sleep(0.3)
         run_guard("afternoon_job", env, timeout=10)
         holder.terminate()

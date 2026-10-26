@@ -28,13 +28,13 @@ fi
 shift
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOCK="$ROOT/locks/qs_db_write.lock"
+LOCK="${QS_LOCK_FILE:-$ROOT/locks/qs_db_write.lock}"  # QS_LOCK_FILE 仅供测试隔离, 生产不设
 INFO="$LOCK.info"
 LOG="${QS_WATCHDOG_LOG:-$ROOT/logs/watchdog.jsonl}"
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3)"  # worktree 无 .venv → 回落系统 python3 (仅解析 yaml)
 YAML="${QS_OPS_YAML:-$ROOT/config/defaults/ops.yaml}"
-mkdir -p "$(dirname "$LOG")" "$ROOT/locks"
+mkdir -p "$(dirname "$LOG")" "$(dirname "$LOCK")"
 
 # ①(a): 从 ops.yaml 读 per-key wait_timeout_s (键缺省/异常 → 0 → 非阻塞现状)。
 # 与 cron_watchdog.sh 预算派生同源同风格 (D-31 单一事实源, 绝不硬编码)。

@@ -30,13 +30,22 @@ def _get_app():
 _PROXY_HEADERS = ("X-Forwarded-For", "X-Real-IP", "Forwarded", "CF-Connecting-IP")
 
 
+# 过短的 token 等于没有 token (如单字符 "a"), 直接拒绝服务而不是放行
+MIN_API_TOKEN_LEN = 16
+
+
 def _require_auth():
     """Bearer token 鉴权。
 
     未配置 QS_API_TOKEN 时只允许真正的本机直连: 带反向代理转发头的请求一律拒绝,
     因为经 cloudflared / nginx 转发进来的外网请求 remote_addr 也是 127.0.0.1。
+    注意: 裸 nginx proxy_pass 默认不加 X-Forwarded-For, 这种情况无法识别为代理流量,
+    所以只要服务经任何反向代理暴露, 就必须设置 QS_API_TOKEN (见 SECURITY.md)。
     """
     token = _api_token()
+    if token and len(token) < MIN_API_TOKEN_LEN:
+        return jsonify({"error": f"server misconfigured: QS_API_TOKEN must be at least "
+                                 f"{MIN_API_TOKEN_LEN} characters"}), 503
     if token:
         auth = request.headers.get("Authorization", "")
         expected = f"Bearer {token}"

@@ -69,6 +69,8 @@ def bootstrap_app(profile: str | None = None) -> Application:
 
     # 数据库初始化
     db_path = config.get("data.db_path", "data/qs.db") if config else "data/qs.db"
+    # 测试隔离: tests/conftest.py 设置 QS_TEST_DB (生产从不设置), 防测试写生产 data/qs.db
+    db_path = os.environ.get("QS_TEST_DB") or db_path
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
     database = Database(db_path)
     database.init_db()

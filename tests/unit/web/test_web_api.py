@@ -22,16 +22,25 @@ class TestAuth:
         assert resp.status_code == 403
 
     def test_with_token_required(self, monkeypatch):
-        monkeypatch.setenv("QS_API_TOKEN", "secret123")
+        monkeypatch.setenv("QS_API_TOKEN", "a-long-test-token-0123456789")
         from web.api import app
         app.config["TESTING"] = True
         with app.test_client() as c:
             resp = c.get("/health")
             assert resp.status_code == 401
-            resp = c.get("/health", headers={"Authorization": "Bearer secret123"})
+            resp = c.get("/health", headers={"Authorization": "Bearer a-long-test-token-0123456789"})
             assert resp.status_code in (200, 500)
             resp = c.get("/health", headers={"Authorization": "Bearer wrong"})
             assert resp.status_code == 401
+
+
+    def test_short_token_refused(self, monkeypatch):
+        monkeypatch.setenv("QS_API_TOKEN", "a")
+        from web.api import app
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            resp = c.get("/health", headers={"Authorization": "Bearer a"})
+            assert resp.status_code == 503
 
 
 class TestValidation:

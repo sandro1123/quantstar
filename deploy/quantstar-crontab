@@ -70,6 +70,12 @@
 # 17:30 运维日报
 30 17 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh daily_ops_report scripts/cron_watchdog.sh daily_ops_report /home/app/quantstar/.venv/bin/python -m src pipeline run daily_ops_report >> /home/app/quantstar/logs/pipeline.log 2>&1
 
+# 17:45 运维仪表盘 Bitable 同步 (ops.yaml dashboard_bitable_sync; 会 INSERT delivery_log, 走 flock)
+45 17 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh dashboard_bitable_sync scripts/cron_watchdog.sh dashboard_bitable_sync /home/app/quantstar/.venv/bin/python scripts/build_ops_bitable.py >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 17:50 Marimo 日报 (ops.yaml marimo_daily_report; 会 INSERT delivery_log, 走 flock)
+50 17 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh marimo_daily_report scripts/cron_watchdog.sh marimo_daily_report /home/app/quantstar/.venv/bin/python scripts/build_marimo_report.py --period daily >> /home/app/quantstar/logs/pipeline.log 2>&1
+
 
 
 # ─── Sprint 3 端到端验证 ──────────────────────
@@ -97,6 +103,9 @@
 # 周六 08:00 周报
 0 8 * * 6 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh weekly_summary /home/app/quantstar/.venv/bin/python -m src pipeline run weekly_summary >> /home/app/quantstar/logs/pipeline.log 2>&1
 
+# 周六 08:30 Marimo 周报 (ops.yaml marimo_weekly_report)
+30 8 * * 6 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh marimo_weekly_report scripts/cron_watchdog.sh marimo_weekly_report /home/app/quantstar/.venv/bin/python scripts/build_marimo_report.py --period weekly >> /home/app/quantstar/logs/pipeline.log 2>&1
+
 # 周日 20:00 WFO 门禁
 0 20 * * 0 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh wfo_gate /home/app/quantstar/.venv/bin/python -m src pipeline run wfo_gate >> /home/app/quantstar/logs/pipeline.log 2>&1
 
@@ -109,6 +118,9 @@
 
 # 每月1日 22:30 月度报告
 30 22 1 * * cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh monthly_report /home/app/quantstar/.venv/bin/python -m src pipeline run monthly_report >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 每月 1 日 22:45 Marimo 月报 (ops.yaml marimo_monthly_report)
+45 22 1 * * cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh marimo_monthly_report scripts/cron_watchdog.sh marimo_monthly_report /home/app/quantstar/.venv/bin/python scripts/build_marimo_report.py --period monthly >> /home/app/quantstar/logs/pipeline.log 2>&1
 
 # QuantStar API 健康检查 (每5分钟, 连续3次失败告警)
 */5 * * * * cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh api_health_check /home/app/quantstar/.venv/bin/python -u scripts/api_health_check.py >> /home/app/quantstar/logs/api_health_check.log 2>&1
