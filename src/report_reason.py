@@ -106,9 +106,18 @@ def _pick_reason(row) -> str:
         return expanded
     added = _field(row, "added_reason")
     added = str(added).strip() if added is not None else ""
+    score = _field(row, "initial_score")
+    try:
+        score = float(score) if score is not None else None
+    except (TypeError, ValueError):
+        score = None
     if not added:
         return NO_REASON_TEXT
     if is_rank_phrase(added):
+        # 机制性互斥：deep_top_n 只覆盖前 N 只，剩余票的 rationale 缺。
+        # 有初始分数时给诚实分数理由，不占位充数；无分数再走占位。
+        if score is not None:
+            return f"综合分 {score:.2f}，量化评分入选，个股依据生成中"
         return GENERATING_TEXT
     return added
 

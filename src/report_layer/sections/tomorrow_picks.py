@@ -144,7 +144,11 @@ class TomorrowPicksSection(Section):
                     # P0-1 (2026-09-28): 论证卡 — rationale 通电后自动升级多字段卡
                     # (零改动消费方: 当前 rationale 0 行降级为单句, 通电后自动升级)
                     # 判例#132: 传 code 才能读 rationale 论证卡 (Day3 补锚)
-                    why = _pick_reason_card({"code": code, "added_reason": reason}, conn=conn, date=context.date)
+                    # rationale 缺且 added_reason 为排名话术时，回落到诚实分数理由，
+                    # 不直接占位「量化评分入选，个股依据生成中」。
+                    why = _pick_reason_card(
+                        {"code": code, "added_reason": reason, "initial_score": score},
+                        conn=conn, date=context.date)
                 lines.append(f"  为什么选它：{why}")
                 if low and high:
                     lines.append(f"  在哪买：建议价区 {low:.2f} ~ {high:.2f}")
