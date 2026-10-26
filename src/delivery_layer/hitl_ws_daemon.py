@@ -211,14 +211,23 @@ _ALLOWLIST_WARNED = False
 
 
 def _approver_allowed(operator) -> bool:
-    """白名单为空时放行并告警一次 (兼容旧部署); 配置后只认名单内的人。"""
+    """白名单未配置时默认拒绝 (fail-closed); 配置后只认名单内的人。
+
+    确需放开 (单人私聊等) 时显式设 HITL_ALLOW_ANY_APPROVER=1。
+    """
     global _ALLOWLIST_WARNED
     allow = _approver_allowlist()
     if not allow:
+        if os.environ.get("HITL_ALLOW_ANY_APPROVER", "").strip().lower() in ("1", "true", "yes"):
+            if not _ALLOWLIST_WARNED:
+                logger.warning("HITL_ALLOW_ANY_APPROVER=1: 任何能点到卡片的人都可审批")
+                _ALLOWLIST_WARNED = True
+            return True
         if not _ALLOWLIST_WARNED:
-            logger.warning("HITL_APPROVER_OPEN_IDS 未配置: 任何能点到卡片的人都可审批, 建议尽快配置")
+            logger.error("HITL_APPROVER_OPEN_IDS 未配置: 审批一律拒绝 (配置白名单, "
+                         "或显式设 HITL_ALLOW_ANY_APPROVER=1)")
             _ALLOWLIST_WARNED = True
-        return True
+        return False
     if operator is None:
         return False
     ids = {getattr(operator, "open_id", None), getattr(operator, "user_id", None)}

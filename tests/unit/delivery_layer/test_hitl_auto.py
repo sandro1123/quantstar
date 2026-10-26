@@ -44,6 +44,9 @@ def hitl(tmp_path, monkeypatch):
 
     monkeypatch.setattr(daemon, "hitl_session", _session)
     monkeypatch.setattr(daemon, "HEARTBEAT_PATH", str(tmp_path / "hb.jsonl"))
+    # 白名单已 fail-closed; 本文件测否决语义, 不测白名单 → 显式放开
+    monkeypatch.delenv("HITL_APPROVER_OPEN_IDS", raising=False)
+    monkeypatch.setenv("HITL_ALLOW_ANY_APPROVER", "1")
 
     calls = {"patch": [], "ledger": []}
     monkeypatch.setattr(daemon, "patch_card",

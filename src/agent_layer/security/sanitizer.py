@@ -1,5 +1,6 @@
 """InputSanitizer — prompt injection 防御"""
 import re
+import unicodedata
 
 from common.logging import get_logger
 
@@ -12,7 +13,7 @@ INJECTION_PATTERNS = [
     r"system\s*prompt",
     r"you\s+are\s+now",
     r"new\s+instructions",
-    r"override",
+    r"override\s+(all\s+|the\s+|your\s+|any\s+)?(previous|prior|system|instructions?|rules?)",
     r"jailbreak",
     r"DAN\s+mode",
     r"act\s+as\s+if",
@@ -30,6 +31,14 @@ INJECTION_PATTERNS = [
 
 MAX_DEPTH = 6
 
+# 零宽/不可见字符: 攻击者插在关键词中间绕过正则
+_ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u00ad"), None)
+
+
+def _normalize(text: str) -> str:
+    """NFKC 归一化 (全角→半角等) + 去零宽字符, 再做注入检测。"""
+    return unicodedata.normalize("NFKC", text).translate(_ZERO_WIDTH)
+
 
 class InputSanitizer:
     def __init__(self):
@@ -46,9 +55,10 @@ class InputSanitizer:
         if depth > MAX_DEPTH:
             return value
         if isinstance(value, str):
-            if self._detect_injection(value):
+            normalized = _normalize(value)
+            if self._detect_injection(normalized):
                 logger.warning(f"injection detected in field: {path}")
-                return self._clean(value)
+                return self._clean(normalized)
             return value
         if isinstance(value, dict):
             return {k: self._walk(v, f"{path}.{k}", depth + 1) for k, v in value.items()}

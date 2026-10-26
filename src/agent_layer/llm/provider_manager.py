@@ -85,10 +85,10 @@ class ProviderManager:
     def call(self, prompt: str, system_prompt: str = None,
              temperature: float = 0.2, max_tokens: int = 2000,
              call_point: str = "manager", timeout: int = None) -> str | None:
-        # Guardrail 检查
-        guard = self.guardrail.check(prompt)
+        # Guardrail 输入端: 只拦 PII (新闻里的「内幕交易立案」等风险词必须送达模型)
+        guard = getattr(self.guardrail, "check_input", self.guardrail.check)(prompt)
         if not guard.passed:
-            logger.warning(f"[{call_point}] guardrail blocked: {guard.flagged}")
+            logger.warning(f"[{call_point}] guardrail blocked input: {guard.flagged}")
             return None
 
         # TokenBudget 检查
@@ -157,6 +157,12 @@ class ProviderManager:
         start = time.time()
         result = self.middleware.execute(adapted_prompt, call_point, call_llm)
         latency_ms = int((time.time() - start) * 1000)
+
+        if result and isinstance(result, str):
+            out_guard = getattr(self.guardrail, "check_output", self.guardrail.check)(result)
+            if not out_guard.passed:
+                logger.warning(f"[{call_point}] guardrail blocked output: {out_guard.flagged}")
+                return None
 
         if result:
             pname = self.client.provider_names[0] if self.client.provider_names else "unknown"
