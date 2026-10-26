@@ -20,11 +20,11 @@ from common.logging import get_logger
 
 logger = get_logger("agent.llm.quota")
 
-# 9router db 真源默认路径 (与 llm.yaml key_source 同库)。
+# 10router 接入: key 与 9router 共享同库 (config/defaults/llm.yaml key_source 先例)。
 # ⚠ 权威 = ops.yaml ops.agent.quota.source_path (ProviderManager 构造点直灌
 # configure); 本常量仅 config 缺省时的降级兜底, 改路径须改 ops.yaml, 此值
 # 须与 defaults 保持同步 — 严禁把这里当真源改 (默合假象判例 09-12)。
-_DEFAULT_SOURCE_PATH = os.path.expanduser("~/.9router/db/data.sqlite")
+_DEFAULT_SOURCE_PATH = os.path.expanduser("~/.10router/db/data.sqlite")
 
 
 class QuotaManager:

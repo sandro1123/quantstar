@@ -27,13 +27,17 @@ class SelectionResult:
     filters_applied: list[str] = field(default_factory=list)
     regime: str = "neutral"
     l3_adjustments: list[str] = field(default_factory=list)
+    # Issue #12: 质量闸门阻断标记
+    blocked: bool = False
+    block_reason: str = ""
 
 class SelectionPipeline:
     def __init__(self, config: dict | None = None, filter_dsl: FilterDSL | None = None,
-                 data_layer=None):
+                 data_layer=None, quality_gate=None):
         self.config = config or {}
         self.filter_dsl = filter_dsl
         self.data_layer = data_layer
+        self._quality_gate = quality_gate  # Issue #12: 注入的数据质量闸门
         # 交易日历 (次新股"上市≥60交易日"判定); 有 db 时用实际交易日, 否则周末+节假日近似
         self._calendar = TradingCalendar(db=getattr(data_layer, "db", None) if data_layer else None)
 
@@ -149,6 +153,24 @@ class SelectionPipeline:
         l3_adjustments = []
         total = len(candidates)
         date = factor_daily[0].date if factor_daily else ""
+
+        # Issue #12: 质量闸门前置检查 (fail-closed)
+        # 若 kline 窗口不完整 / 多源交叉校验失败 / flag 累积超阈 → 阻断选股,
+        # 返回 blocked=True + 原因, 不产生候选。
+        qgate = self._quality_gate
+        if qgate is None and self.data_layer is not None:
+            from data_layer.quality import DataQualityGate
+            qgate = DataQualityGate(self.data_layer.db,
+                                    config=self.config.get("data.quality_gate"))
+        if qgate is not None:
+            codes = [c.code for c in candidates]
+            can, reason = qgate.check(date, codes=codes)
+            if not can:
+                logger.warning(f"选股被质量闸门阻断: {reason}")
+                return SelectionResult(
+                    date=date, candidates=[], total_evaluated=total,
+                    filters_applied=[f"质量闸门阻断: {reason}"],
+                    regime=market_regime, blocked=True, block_reason=reason)
 
         # L0: 声明式筛选 DSL
         if self.filter_dsl is not None:

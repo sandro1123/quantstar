@@ -503,7 +503,8 @@ def main() -> None:
     runner_up = ranked[1][0] if len(ranked) > 1 else best
 
     def write_json(path: str, data: Any):
-        (output_dir / path).write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        (output_dir / path).write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     option_descriptions = {
         "A_rebuild_baostock": "Re-query BaoStock with fixed adapter",
@@ -690,7 +691,7 @@ def main() -> None:
     decision_report += f"**Recommended: {best}** (runner-up: {runner_up})\n\n"
     decision_report += f"{option_descriptions[best]}\n\n"
     decision_report += f"**P2-06_NOT_EXECUTED: true**\n\n"
-    (output_dir / "p2-06-decision-report.md").write_text(decision_report)
+    (output_dir / "p2-06-decision-report.md").write_text(decision_report, encoding="utf-8")
 
     execution_plan = {
         "phase": "P2-06",

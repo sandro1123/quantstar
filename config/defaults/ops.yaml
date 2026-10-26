@@ -769,8 +769,8 @@ ops:
       daily_budget_requests: 3000     # Agent key 日预算 (当日真 requests)
       daily_budget_cost: 5.0          # 日成本预算 ($)
       low_remaining_pct: 0.30         # 剩余<30% 触发保守降级
-      source_path: ~/.9router/db/data.sqlite
-      api_key_hint: sk-4166fcd0        # byApiKey 前缀匹配 hint (Agent key)
+      source_path: ~/.10router/db/data.sqlite
+      api_key_hint: Hermes-Agent        # byApiKey 前缀匹配 hint (10router 有效 key)
 
   # Q4: BEGIN IMMEDIATE 锁健康探针 — scripts/lock_probe.py 运行时读本段
   # (铁律 #9 例外已获批, 三约束: 短 busy_timeout / try-finally rollback / 频率限制,

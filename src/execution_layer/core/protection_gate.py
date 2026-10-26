@@ -33,7 +33,8 @@ class ProtectionGate:
 
     check(code, current_time) -> (can_trade: bool, reason: str)。
     任一守卫拦截即返回 (False, reason); 全过返回 (True, "")。
-    守卫自身异常 honest 放行 (保护闸门故障不应堵死交易主链路, 只 warning)。
+    守卫自身异常 → 熔断拦截 (fail-closed): 依赖异常不得导致静默放行,
+    否则闸门失效即等同于无闸门 (Issue #9)。
     """
 
     def __init__(self, db, stock_pool, config=None):
@@ -82,9 +83,12 @@ class ProtectionGate:
                       self._check_drawdown):
             try:
                 reason = guard(code)
-            except Exception as e:  # noqa: BLE001 — 守卫故障放行+告警, 不堵主链路
+            except Exception as e:  # noqa: BLE001 — 守卫故障熔断拦截 (fail-closed, Issue #9)
                 logger.warning(f"protection guard {guard.__name__} failed: {e}")
-                continue
+                reason = (f"{guard.__name__} 守卫异常: {e}, "
+                          f"风控闸门熔断拦截 (fail-closed)")
+                self._record_block(code, reason)
+                return False, reason
             if reason:
                 self._record_block(code, reason)
                 return False, reason

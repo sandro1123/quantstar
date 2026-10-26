@@ -100,7 +100,8 @@ class StrategyLayer:
         self.mode = mode
         self.factor_engine = FactorEngine(data_layer, mode=mode, db=self.db)
         self.aggregator = Aggregator()
-        self.selector = SelectionPipeline(config=self.config, data_layer=data_layer)
+        self.selector = SelectionPipeline(config=self.config, data_layer=data_layer,
+                                          quality_gate=self._build_quality_gate())
         self.signal_generator = SignalGenerator(config=self.config)
         self.deep_review = DeepReview(agent_layer, data_layer=data_layer)  # DL-41
         from agent_layer.debate.experts import ALL_EXPERTS
@@ -120,6 +121,25 @@ class StrategyLayer:
     def start(self):
         self._ensure_tables()
         logger.info("Strategy Layer 启动完成")
+
+    def _build_quality_gate(self):
+        """Issue #12: 构建数据质量闸门 (fail-closed)。
+
+        从 config 读 data.quality_gate 分段; 无配置回落默认值。
+        若 data_layer/db 不可用 → 返回 None (质量闸门降级为不阻断,
+        调用方在 selector.run 内按质量闸门 absent 时的行为处理)。
+        """
+        if self.data_layer is None or getattr(self.data_layer, "db", None) is None:
+            return None
+        try:
+            from data_layer.quality import DataQualityGate
+            cfg = {}
+            if self.config:
+                cfg = self.config.get("data.quality_gate", {}) or {}
+            return DataQualityGate(self.data_layer.db, config=cfg)
+        except Exception as e:
+            logger.warning(f"质量闸门构建失败 (fail-open 降级): {e}")
+            return None
 
     def health(self):
         from datetime import datetime, timedelta

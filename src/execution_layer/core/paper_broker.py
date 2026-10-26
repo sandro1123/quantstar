@@ -8,6 +8,7 @@ from config_layer import cfg_get
 from delivery_layer import DeliveryLayer, Message
 from execution_layer.core.action_record import ActionRecord
 from execution_layer.core.constraint_checker import calculate_fees
+from execution_layer.core.protection_gate import ProtectionGate  # Issue #8: paper trading 走同款风控闸门
 from execution_layer.core.stock_pool import StockPool
 # P1 合规措辞单一来源: 取值延迟到通知构造时 (模块顶 import 会经 intraday/__init__ 回环 monitor→paper_broker)
 
@@ -34,6 +35,7 @@ class PaperBroker:
     def __init__(self, db, stock_pool: StockPool, config=None, dry_run: bool = False):
         self.db = db
         self.stock_pool = stock_pool
+        self.config = config  # Issue #8: 保存供 ProtectionGate 使用
         self.action_record = ActionRecord(db)
         self._initial_capital = cfg_get("execution.initial_capital", 300000.0)
         self._delivery = None
@@ -84,6 +86,16 @@ class PaperBroker:
             qty = self._calc_qty(entry_price)
             if qty <= 0:
                 return PaperTradeResult(success=False, code=code, side="entry", price=entry_price, reason="zero_qty")
+
+            # Issue #8: paper trading 必须穿过同款 ProtectionGate (生产主链路在 entry_engine
+            # 里已通电, 纸交易此前绕闸直写 — 补齐后与 production 同一风控口径)。
+            gate = ProtectionGate(self.db, self.stock_pool, config=self.config)
+            can_trade, prot_reason = gate.check(code, bj_now()[:19])
+            if not can_trade:
+                logger.info(f"Paper entry blocked by protection gate for {code}: {prot_reason}")
+                return PaperTradeResult(
+                    success=False, code=code, side="entry", price=entry_price,
+                    reason=f"protection_gate:{prot_reason}")
 
             amount = qty * entry_price
             fees = calculate_fees(entry_price, qty, is_buy=True)

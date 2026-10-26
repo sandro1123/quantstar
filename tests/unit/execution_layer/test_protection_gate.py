@@ -7,6 +7,7 @@ import pytest
 from common.database import Database
 from execution_layer import ExecutionLayer
 from execution_layer.core.protection_gate import ProtectionGate
+from tests.unit._mutation import assert_mutation_caught
 
 
 @pytest.fixture()
@@ -151,3 +152,102 @@ def test_clean_ledger_allows(el):
     """空账本 → 三守卫全过"""
     can, reason = _gate(el).check("000001", "14:00")
     assert can, f"空账本应放行: {reason}"
+
+
+# -- Issue #9: fail-closed when a guard throws ----------------------------
+
+def _make_guard_boom(el, guard_name: str):
+    """把指定守卫注入异常，验证 check() 熔断拦截（不诚实放行）。"""
+    g = _gate(el)
+    orig = getattr(g, guard_name)
+    def _boom(code):
+        raise RuntimeError(f"guard {guard_name} 依赖失效")
+    setattr(g, guard_name, _boom)
+    return g, orig
+
+
+def test_guard_exception_fail_closed_cooldown(el):
+    """冷却期守卫抛异常 → check() 必须拦截 (fail-closed，Issue #9)。"""
+    g, orig = _make_guard_boom(el, "_check_cooldown")
+    can, reason = g.check("000001", "14:00")
+    assert not can, f"守卫异常时必须拦截: {reason}"
+    assert "fail-closed" in reason or "熔断拦截" in reason or "异常" in reason
+    # 留痕必须落库
+    rows = el.db.get_connection().execute(
+        "SELECT reason FROM action_records WHERE code='000001' "
+        "AND action_type='skip_entry'").fetchall()
+    assert any("fail-closed" in str(r["reason"]) or "熔断拦截" in str(r["reason"])
+               for r in rows), "拦截须留痕"
+
+
+def test_guard_exception_fail_closed_stoploss(el):
+    """连损日停守卫抛异常 → check() 必须拦截 (fail-closed，Issue #9)。"""
+    g, orig = _make_guard_boom(el, "_check_daily_stoploss")
+    can, reason = g.check("000001", "14:00")
+    assert not can, f"守卫异常时必须拦截: {reason}"
+    assert "异常" in reason or "fail-closed" in reason or "熔断拦截" in reason
+
+
+def test_guard_exception_fail_closed_drawdown(el):
+    """回撤熔断守卫抛异常 → check() 必须拦截 (fail-closed，Issue #9)。"""
+    g, orig = _make_guard_boom(el, "_check_drawdown")
+    can, reason = g.check("000001", "14:00")
+    assert not can, f"守卫异常时必须拦截: {reason}"
+    assert "异常" in reason or "fail-closed" in reason or "熔断拦截" in reason
+
+
+def test_guard_exception_then_recovery_allows(el):
+    """守卫恢复正常后，check() 再次放行 (fail-closed 不是永久拒止)。"""
+    g = _gate(el)
+    # 首次：cooldown 抛异常 → 拦截
+    boom = lambda code: (_ for _ in ()).throw(RuntimeError("依赖失效"))
+    orig_cooldown = g._check_cooldown
+    g._check_cooldown = boom
+    can, _ = g.check("000001", "14:00")
+    assert not can, "异常时应拦截"
+    # 恢复：放行
+    g._check_cooldown = orig_cooldown
+    can, reason = g.check("000001", "14:00")
+    assert can, f"恢复后应放行: {reason}"
+
+
+# -- 变异验证 (AGENTS.md 断言必须证明自己会红) -------------
+
+def test_mutation_fail_closed_is_real(el):
+    """变异验证：若 ProtectionGate.check 回退到旧 fail-open (守卫异常 continue 放行),
+    断言必须报红，否则永绿断言等于没有断言 (AGENTS.md 铁律 #1)。"""
+    from execution_layer.core.protection_gate import ProtectionGate
+
+    g = _gate(el)
+    orig_check = ProtectionGate.check
+
+    def _mutate_to_fail_open():
+        def _fail_open_check(self, code, current_time):
+            for guard in (self._check_cooldown, self._check_daily_stoploss,
+                          self._check_drawdown):
+                try:
+                    reason = guard(code)
+                except Exception:
+                    continue  # 旧实现：守卫故障放行 (fail-open)
+                if reason:
+                    self._record_block(code, reason)
+                    return False, reason
+            return True, ""
+        ProtectionGate.check = _fail_open_check
+
+    def _check_blocks_on_guard_exception():
+        boom = lambda code: (_ for _ in ()).throw(RuntimeError("依赖失效"))
+        orig = g._check_cooldown
+        g._check_cooldown = boom
+        try:
+            can, _ = g.check("000001", "14:00")
+        finally:
+            g._check_cooldown = orig
+        assert not can, "守卫异常时必须拦截 (fail-closed)"
+
+    try:
+        assert_mutation_caught(_mutate_to_fail_open,
+                               _check_blocks_on_guard_exception,
+                               "protection gate fail-closed (守卫异常须拦截)")
+    finally:
+        ProtectionGate.check = orig_check

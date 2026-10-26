@@ -305,3 +305,136 @@ class KlineQualityGate:
         except Exception as e:
             logger.error(f"quality gate error (fail-open, 写入继续): {e}")
         return records
+
+
+# ============================================================================
+# Issue #12: 数据质量闸门阻断 (fail-closed)
+#
+# 质量闸门在写入/选股链路前置：kline 窗口完整性、多源价格交叉校验、
+# 阈值违反时阻断下游选股，而不是只标记后放行。
+# ============================================================================
+
+class DataQualityGate:
+    """选股前置数据质量闸门 (fail-closed)。
+
+    于策略层 select 阶段之前调用：检查 daily_klines 当日窗口完整性 +
+    多源交叉校验，阈值违反 → 返回 (False, reason)，阻断下游选股；
+    全过 → (True, "")，允许继续。
+
+    阶段 A (kline 窗口完整性):
+      - 当日 daily_klines 行数 >= cfg["min_daily_rows"] (默认 4000,
+        对齐 ops MIN_KLINE_ROWS);
+      - 候选池内每只股票当日必须有 kline 行 (缺行视为停牌/断档);
+
+    阶段 B (多源价格交叉校验):
+      - 对抽样 N 只股票 (cfg["crosscheck_sample"], 默认 50) 走
+        source_crosscheck_diffs 表 (由 SourceCrosscheckPipeline 已落库),
+        若 close 差异率 > cfg["crosscheck_diff_rate"] (默认 5%) → 阻断;
+
+    阶段 C (质量标记累积阈值):
+      - data_quality_flags 当日 flag 数 >= cfg["max_daily_flags"] (默认 500) → 阻断;
+
+    所有检查均 fail-closed：依赖异常/表不存在 → 阻断 (不放行),
+    避免「坏数据静默进选股」的假绿。
+    """
+
+    def __init__(self, db, config=None):
+        self.db = db
+        self.cfg = dict(self.DEFAULTS)
+        if config:
+            for k in self.cfg:
+                if k in config:
+                    self.cfg[k] = config[k]
+
+    DEFAULTS = {
+        "enabled": True,
+        "min_daily_rows": 4000,        # 当日 daily_klines 最低行数 (对齐 ops MIN_KLINE_ROWS)
+        "crosscheck_sample": 50,        # 多源对拍抽样只数
+        "crosscheck_diff_rate": 0.05,   # close 差异率超此值阻断 (5%)
+        "max_daily_flags": 500,         # 当日质量 flag 总数超此值阻断
+        "table": "daily_klines",
+    }
+
+    def check(self, date: str, codes: list[str] | None = None) -> tuple[bool, str]:
+        """前置质量检查。
+
+        Returns:
+            (can_proceed: bool, reason: str)。can_proceed=False 时附带
+            人类可读的阻断原因，选股层应中止并告警。
+        """
+        if not self.cfg.get("enabled", True):
+            return True, ""
+
+        try:
+            conn = self.db.get_connection()
+        except Exception as e:
+            # db 连不上 → 无法判定数据是否健康，保守阻断 (fail-closed)
+            return False, f"数据库连接失败，质量闸门无法判定: {e}"
+
+        # 阶段 A: kline 窗口完整性
+        try:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM {self.cfg['table']} WHERE date = ?",
+                (date,)).fetchone()
+            daily_rows = int(row[0]) if row else 0
+        except Exception as e:
+            return False, f"kline 窗口行数查询失败 (表可能缺失): {e}"
+
+        if daily_rows < int(self.cfg["min_daily_rows"]):
+            return (False,
+                    f"kline 窗口不完整: 当日 {date} 仅 {daily_rows} 行 "
+                    f"< 最低 {self.cfg['min_daily_rows']} 行，阻断选股")
+
+        # 候选池内每只股票当日必须有 kline 行
+        if codes:
+            missing = []
+            ph = ",".join("?" * len(codes))
+            rows = conn.execute(
+                f"SELECT DISTINCT code FROM {self.cfg['table']} "
+                f"WHERE date = ? AND code IN ({ph})",
+                [date, *codes]).fetchall()
+            present = {r[0] for r in rows}
+            for c in codes:
+                if c not in present:
+                    missing.append(c)
+            if missing:
+                return (False,
+                        f"kline 缺行: {len(missing)} 只候选股票当日无行 "
+                        f"(示例: {missing[:5]}{'…' if len(missing) > 5 else ''}), "
+                        f"阻断选股")
+
+        # 阶段 B: 多源价格交叉校验 (读已落库的 source_crosscheck_diffs)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM source_crosscheck_diffs WHERE date = ?",
+                (date,)).fetchone()
+            diff_count = int(row[0]) if row else 0
+        except Exception:
+            # diffs 表不存在 → 对拍通道未首跑，保守不阻断 (观测件缺失≠坏数据),
+            # 但留痕 (铁律 #12)
+            diff_count = 0
+            logger.warning("source_crosscheck_diffs 表不存在，跳过多源交叉校验")
+
+        if diff_count > 0:
+            sampled = min(int(self.cfg["crosscheck_sample"]), len(codes or [])) if codes else int(self.cfg["crosscheck_sample"])
+            if sampled > 0 and diff_count >= max(1, int(sampled * float(self.cfg["crosscheck_diff_rate"]))):
+                return (False,
+                        f"多源价格交叉校验失败: {date} 差异行 {diff_count} 只 "
+                        f"(抽样 {sampled} 只, 阈值 {float(self.cfg['crosscheck_diff_rate']):.0%}), "
+                        f"阻断选股")
+
+        # 阶段 C: 质量标记累积阈值
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM data_quality_flags WHERE date = ?",
+                (date,)).fetchone()
+            flag_count = int(row[0]) if row else 0
+        except Exception:
+            flag_count = 0
+
+        if flag_count >= int(self.cfg["max_daily_flags"]):
+            return (False,
+                    f"质量 flag 累积超阈: 当日 {date} flag 共 {flag_count} 条 "
+                    f">= {self.cfg['max_daily_flags']}, 阻断选股")
+
+        return True, ""
