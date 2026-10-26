@@ -502,6 +502,12 @@ class DataLayer:
         return self.loader.forward_return(code, date, horizon)
 
     @catch_quantstar_error(layer_name="data")
+    @with_timeout(timeout_s=5)
+    def realized_return(self, code: str, date: str, horizon: int = 5) -> float | None:
+        """截至 date 已实现的 horizon 日收益 (百分点; 选股唯一可用口径, 见 loader 同名方法)"""
+        return self.loader.realized_return(code, date, horizon)
+
+    @catch_quantstar_error(layer_name="data")
     @with_timeout(timeout_s=15)
     def get_fwd_returns(self, date: str, horizon: int = 5) -> dict:
         """DL-24: 某日全市场前向收益截面 {code: 收益率(百分点)} — 统一评估读 API"""

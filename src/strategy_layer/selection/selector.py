@@ -1,4 +1,5 @@
 """选股管道 — L1 过滤 + L2 Top-N + L3 市场状态调整"""
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -207,17 +208,24 @@ class SelectionPipeline:
             l3_adjustments.append("行业去重: 无行业数据，跳过")
 
         # L3.3: 近期表现反馈 (幅度感知)
+        # 口径铁律 (2026-10-26 审计 S-1): 只许读 recent_return = T-N → T **已实现**收益
+        # (由 Aggregator.fill_recent_returns 从 data_layer.realized_return 填)。
+        # forward_return (T → T+N) 是未来量, 出现在这里就是前视泄漏 —— 绝不允许。
         adjusted = 0
         for c in candidates:
-            if c.recent_return is not None:
-                boost = max(-0.2, min(0.2, c.recent_return * 2))
-                if boost != 0:
-                    from copy import copy
-                    idx = candidates.index(c)
-                    c = copy(c)
-                    c.composite_score *= (1 + boost)
-                    candidates[idx] = c
-                    adjusted += 1
+            if c.recent_return is None:
+                continue
+            val = c.recent_return
+            if not isinstance(val, (int, float)) or isinstance(val, bool) or not math.isfinite(val):
+                continue  # 脏值不参与排序 (NaN 会让 sort 结果不确定)
+            boost = max(-0.2, min(0.2, val * 2))
+            if boost != 0:
+                from copy import copy
+                idx = candidates.index(c)
+                c = copy(c)
+                c.composite_score *= (1 + boost)
+                candidates[idx] = c
+                adjusted += 1
         if adjusted > 0:
             l3_adjustments.append(f"近期表现调整: {adjusted} 只股票评分已调整")
 

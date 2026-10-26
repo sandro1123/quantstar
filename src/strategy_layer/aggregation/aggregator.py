@@ -57,7 +57,11 @@ class FactorDaily:
     quantile: int = 0
     ml_score: float = 0.0
     sector: str = ""
+    # 截至决策日 T 已实现的近期收益 (选股 L3.3 动量加成只允许用它)。
     recent_return: float | None = None
+    # T→T+N 前向收益: 只允许进入滞后日的 IC 计算, 绝不允许进入选股排序
+    # (2026-10-26 审计 S-1: 旧实现把前向收益写进 recent_return, 历史回放里等于未来信号)。
+    forward_return: float | None = None
 
 
 def _composite_with_contract(adjusted: dict[str, float], weights: dict[str, float]) -> tuple[float, list[str]]:
@@ -147,25 +151,53 @@ class Aggregator:
 
     @staticmethod
     def fill_recent_returns(factor_dailies: list[FactorDaily], data_layer, date: str, horizon: int = 5) -> int:
-        """填充 FactorDaily.recent_return (F3.2 断链1)。
+        """填充两条**语义相反**的收益字段 (名字保留, 免动 7 处 pytest patch 点)。
 
-        从 data_layer.forward_return 读 T+horizon 前向收益写入 fd.recent_return。
-        当日的前向收益通常尚未实现 (返回 None), 属正常; 返回成功填充的条数。
+          fd.recent_return  ← data_layer.realized_return : T-horizon → T, **已实现**
+                               → 选股 L3.3 唯一可读口径 (未来函数反面)
+          fd.forward_return ← data_layer.forward_return : T → T+horizon, **未来**
+                               → 只许进滞后日 IC 观测, 绝不进选股排序
+
+        病与修 (2026-10-26 审计 S-1):
+          旧: 前向收益写进 recent_return → 选股用未来收益排序 (前视)。
+          中间态 (PR#4): 值挪到 forward_return, recent_return 恒 None
+                        → L3.3 静默变死代码 (把功能连同病一起删了)。
+          本实现: 两条各填各的, 一个字段一个时点, 不许互相顶替。
+
+        返回: forward_return 填充条数 (= IC 可观测样本数, 保持 PR#4 语义)。
+        当日 K 线未落地时两条都可能全 None, 属正常。
         """
-        if data_layer is None or not hasattr(data_layer, "forward_return"):
+        if data_layer is None:
+            return 0
+        has_fwd = hasattr(data_layer, "forward_return")
+        has_real = hasattr(data_layer, "realized_return")
+        if not has_fwd and not has_real:
             return 0
         filled = 0
+        recent_filled = 0
         for fd in factor_dailies:
-            try:
-                ret = data_layer.forward_return(fd.code, date, horizon)
-            except Exception:
-                ret = None
-            # 仅接受有限数值 (防御 mock/脏数据返回非 float, 下游会与 float 比较)
-            if isinstance(ret, (int, float)) and not isinstance(ret, bool) and math.isfinite(ret):
-                fd.recent_return = float(ret)
-                filled += 1
-        if filled:
-            logger.info(f"fill_recent_returns: {filled}/{len(factor_dailies)} stocks (horizon={horizon}d)")
+            if has_fwd:
+                try:
+                    ret = data_layer.forward_return(fd.code, date, horizon)
+                except Exception:
+                    ret = None
+                # 仅接受有限数值 (防御 mock/脏数据返回非 float, 下游会与 float 比较)
+                if isinstance(ret, (int, float)) and not isinstance(ret, bool) and math.isfinite(ret):
+                    fd.forward_return = float(ret)
+                    filled += 1
+            if has_real:
+                try:
+                    past = data_layer.realized_return(fd.code, date, horizon)
+                except Exception:
+                    past = None
+                if isinstance(past, (int, float)) and not isinstance(past, bool) and math.isfinite(past):
+                    fd.recent_return = float(past)
+                    recent_filled += 1
+        if filled or recent_filled:
+            logger.info(
+                f"fill_recent_returns: forward={filled} realized={recent_filled}"
+                f"/{len(factor_dailies)} stocks (horizon={horizon}d)"
+            )
         return filled
 
     @staticmethod

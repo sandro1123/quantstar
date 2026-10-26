@@ -2,7 +2,7 @@
 
 验证:
 1. WeightPersistence 读写 DB 表 factor_weights / factor_ic (非已废弃的 JSON 文件)。
-2. Aggregator.fill_recent_returns 从 data_layer.forward_return 填充 fd.recent_return。
+2. Aggregator.fill_recent_returns 从 data_layer.forward_return 填充 fd.forward_return (只供 IC, 不进选股排序)。
 3. 注入 mock 收益 → 跑 ic_feedback → 断言 factor_weights 被更新,
    且 20%上限/3天确认/周一平滑 保护逻辑至少被调用一次。
 """
@@ -93,9 +93,11 @@ class TestFillRecentReturns:
         ]
         filled = Aggregator.fill_recent_returns(fds, FakeDataLayer(), "2026-08-10")
         assert filled == 2
-        assert fds[0].recent_return == 0.05
-        assert fds[1].recent_return == -0.02
-        assert fds[2].recent_return is None
+        assert fds[0].forward_return == 0.05
+        assert fds[1].forward_return == -0.02
+        assert fds[2].forward_return is None
+        # 前向收益绝不能写进选股用的 recent_return (审计 S-1)
+        assert all(fd.recent_return is None for fd in fds)
 
     def test_fill_no_data_layer(self):
         fds = [FactorDaily(code="001", date="2026-08-10", composite_score=1.0)]
