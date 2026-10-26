@@ -97,6 +97,9 @@ class RebalanceEngine:
         if pct > effective_max_pct:
             target_qty = int(effective_max_pct * total_capital / 100 / current_price)
             reduce_qty = max(0, qty - target_qty)
+            # A 股卖出须为 100 股整数倍 (仅清仓时允许零股): 向上取整到整手, 不超过持仓
+            if 0 < reduce_qty < qty:
+                reduce_qty = min(qty, -(-reduce_qty // 100) * 100)
             return ReduceCheckResult(can_reduce=True, reduce_qty=reduce_qty, current_pct=round(pct, 1), regime=self.get_regime_label())
         return ReduceCheckResult(can_reduce=False, reason="仓位正常")
 

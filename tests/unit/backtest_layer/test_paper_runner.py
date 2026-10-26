@@ -293,6 +293,17 @@ class TestGraduation:
         out = PaperTradingRunner().evaluate_graduation(0.5, 1.0, 60)
         assert out["decision"] == "continue"
 
+    def test_negative_backtest_sharpe_never_graduates(self):
+        """审计 M-2: 回测 Sharpe -1 → 阈值 -0.7, 纸盘 -0.5 旧实现会判毕业。"""
+        out = PaperTradingRunner().evaluate_graduation(-0.5, -1.0, 60)
+        assert out["decision"] == "continue"
+        out = PaperTradingRunner().evaluate_graduation(2.0, 0.0, 60)
+        assert out["decision"] == "continue"
+
+    def test_non_positive_paper_sharpe_never_graduates(self):
+        out = PaperTradingRunner().evaluate_graduation(0.0, 0.1, 60)
+        assert out["decision"] == "continue"
+
     def test_check_graduation_invalid_dates(self):
         out = PaperTradingRunner().check_graduation(1.0, "bad", "dates")
         assert out["decision"] == "continue"

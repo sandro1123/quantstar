@@ -1,6 +1,6 @@
 """backtest_layer/core/broker.py — 交易模拟器（含涨跌停限价 + 多订单类型）"""
-
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 
 from backtest_layer.core.models import CostConfig
 
@@ -31,11 +31,17 @@ def is_st_name(name: str | None) -> bool:
     return n.startswith("ST") or n.startswith("*ST") or n.startswith("S*ST")
 
 
-def _get_price_limit_pct(code: str, name: str | None = None, is_st: bool = False) -> float:
-    """根据代码 (+名称/ST 标记) 判断涨跌停幅度
+# 沪深交易所《交易规则（2026年修订）》: 自 2026-07-06 起主板风险警示股票
+# (ST/*ST) 涨跌幅限制由 5% 调整为 10%。按交易日生效, 之前的历史回测仍按 5%。
+MAIN_BOARD_ST_10PCT_EFFECTIVE = "2026-07-06"
+
+
+def _get_price_limit_pct(code: str, name: str | None = None, is_st: bool = False,
+                         trade_date: str | None = None) -> float:
+    """根据代码 (+名称/ST 标记 + 交易日) 判断涨跌停幅度
     - 300xxx/301xxx (创业板) / 688xxx/689xxx (科创板): ±20%
     - 北交所 (8xxxxx / 4xxxxx / 92xxxx): ±30%
-    - ST/*ST (主板): ±5% — 由 is_st 或 name 判定 (创业板/科创板/北交所 ST 仍按板块幅度)
+    - ST/*ST (主板): 2026-07-06 前 ±5%, 之后 ±10% (trade_date 缺省按现行规则 10%)
     - 其余主板: ±10%
     注: ST 状态为调用时点名称口径, 非 point-in-time (见 PR TODO)。
     """
@@ -45,8 +51,15 @@ def _get_price_limit_pct(code: str, name: str | None = None, is_st: bool = False
     if code.startswith(("8", "4", "92")):
         return 0.30
     if is_st or is_st_name(name):
-        return 0.05
+        if trade_date and str(trade_date)[:10] < MAIN_BOARD_ST_10PCT_EFFECTIVE:
+            return 0.05
+        return 0.10
     return 0.10
+
+
+def _round_price(value: Decimal) -> float:
+    """交易所口径: 四舍五入到分 (ROUND_HALF_UP, 不用 float round 的银行家舍入)。"""
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 class Broker:
@@ -66,14 +79,16 @@ class Broker:
         self._volume_limit_pct = 0.05  # 单笔成交不超过日成交量5%
 
     def _calc_price_limit(self, code: str, pre_close: float, name: str | None = None,
-                          is_st: bool = False) -> tuple[float, float]:
-        limit_pct = _get_price_limit_pct(code, name=name, is_st=is_st)
-        # 交易所口径: 涨跌停价四舍五入到分
-        return round(pre_close * (1 - limit_pct), 2), round(pre_close * (1 + limit_pct), 2)
+                          is_st: bool = False, trade_date: str | None = None) -> tuple[float, float]:
+        limit_pct = Decimal(str(_get_price_limit_pct(code, name=name, is_st=is_st,
+                                                     trade_date=trade_date)))
+        base = Decimal(str(pre_close))
+        # 交易所口径: 涨跌停价 = 前收盘 × (1 ± 幅度), 四舍五入到分
+        return _round_price(base * (1 - limit_pct)), _round_price(base * (1 + limit_pct))
 
     def validate_order(self, code: str, price: float, shares: int, pre_close: float | None = None,
                        side: str | None = None, name: str | None = None,
-                       is_st: bool = False) -> TradeResult | None:
+                       is_st: bool = False, trade_date: str | None = None) -> TradeResult | None:
         if not code or len(code) < 6:
             return TradeResult(success=False, reason="invalid_code")
         if price <= 0:
@@ -83,7 +98,8 @@ class Broker:
         if shares % self.A_SHARE_LOT != 0:
             return TradeResult(success=False, reason="not_round_lot")
         if pre_close is not None and pre_close > 0:
-            limit_down, limit_up = self._calc_price_limit(code, pre_close, name=name, is_st=is_st)
+            limit_down, limit_up = self._calc_price_limit(code, pre_close, name=name, is_st=is_st,
+                                                             trade_date=trade_date)
             eps = 0.005  # 半分容差 (价格精度到分)
             if price > limit_up + eps:
                 return TradeResult(success=False, reason="price_above_limit_up")
@@ -123,7 +139,7 @@ class Broker:
             is_st: bool = False) -> TradeResult:
         self.mark_day_start(date)
         validation = self.validate_order(code, price, shares, pre_close, side="buy",
-                                         name=name, is_st=is_st)
+                                         name=name, is_st=is_st, trade_date=date)
         if validation:
             self._record_order(code, "buy", date, price, shares, order_type,
                                success=False, reason=validation.reason)
@@ -227,7 +243,7 @@ class Broker:
                                success=False, reason="t_plus_1_locked")
             return TradeResult(success=False, reason="t_plus_1_locked")
         validation = self.validate_order(code, price, shares, pre_close, side="sell",
-                                         name=name, is_st=is_st)
+                                         name=name, is_st=is_st, trade_date=date)
         if validation:
             self._record_order(code, "sell", date, price, shares, order_type,
                                success=False, reason=validation.reason)

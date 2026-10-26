@@ -63,7 +63,7 @@ def test_backtest_signal_mode():
         {"code": "000001", "signal": "hold", "date": "2026-07-18"},
         {"code": "000001", "signal": "sell", "date": "2026-07-19"},
     ]
-    prices = {"000001": [15.0, 16.0, 15.5]}
+    prices = {"000001": {"2026-07-16": 15.0, "2026-07-17": 15.0, "2026-07-18": 16.0, "2026-07-19": 15.5}}
     result = mode.run(signals, prices)
     assert result["mode"] == "signal"
     assert result["trade_count"] >= 1

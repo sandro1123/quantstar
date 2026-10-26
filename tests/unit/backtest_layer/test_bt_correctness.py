@@ -48,11 +48,51 @@ def _cost(cap=1_000_000):
     ("600000", None, 0.10), ("000001", None, 0.10),
     ("300750", None, 0.20), ("301001", None, 0.20), ("688981", None, 0.20),
     ("830799", None, 0.30), ("430047", None, 0.30), ("920002", None, 0.30),
-    ("600000", "ST海润", 0.05), ("000001", "*ST某某", 0.05),
+    ("600000", "ST海润", 0.10), ("000001", "*ST某某", 0.10),  # 2026-07-06 起主板 ST 10%
     ("300001", "ST创业", 0.20),  # 创业板 ST 仍 20%
 ])
 def test_price_limit_pct_by_board(code, name, pct):
     assert _get_price_limit_pct(code, name=name) == pct
+
+
+@pytest.mark.parametrize("trade_date,pct", [
+    ("2026-07-03", 0.05), ("2026-07-06", 0.10), ("2026-08-03", 0.10), ("2025-12-31", 0.05),
+])
+def test_main_board_st_limit_is_date_effective(trade_date, pct):
+    assert _get_price_limit_pct("600001", name="ST测试", trade_date=trade_date) == pct
+    # 创业板/科创板 ST 不受影响
+    assert _get_price_limit_pct("300001", name="ST创业", trade_date=trade_date) == 0.20
+
+
+def test_st_buy_at_plus_7pct_allowed_after_rule_change():
+    b = Broker(_cost())
+    assert b.buy("600001", 10.70, 100, "2026-08-03", pre_close=10.0, name="ST测试").success
+    r = b.buy("600002", 10.70, 100, "2026-07-03", pre_close=10.0, name="ST测试")
+    assert not r.success and r.reason == "price_above_limit_up"
+
+
+@pytest.mark.parametrize("pre_close,pct,limit_down,limit_up", [
+    (1.45, 0.10, 1.31, 1.60),   # float round 会得 1.59
+    (1.15, 0.10, 1.04, 1.27),   # float round 会得 1.26 / 1.03
+    (1.10, 0.05, 1.05, 1.16),   # 跌停 float round 会得 1.04
+    (10.00, 0.10, 9.00, 11.00),
+])
+def test_price_limit_rounds_half_up_to_cent(pre_close, pct, limit_down, limit_up):
+    from decimal import ROUND_HALF_UP, Decimal
+    code = {0.10: "600000", 0.05: "600000"}[pct]
+    kw = {"name": "ST测试", "is_st": True} if pct == 0.05 else {}
+    b = Broker(_cost())
+    got = b._calc_price_limit(code, pre_close, trade_date="2026-01-05", **kw)
+    assert got == (limit_down, limit_up)
+    exp = (Decimal(str(pre_close)) * (1 + Decimal(str(pct)))).quantize(Decimal("0.01"), ROUND_HALF_UP)
+    assert got[1] == float(exp)
+
+
+def test_buy_at_true_limit_up_is_sealed_not_above_limit():
+    b = Broker(_cost())
+    r = b.buy("600000", 1.60, 100, "2026-08-03", pre_close=1.45)
+    assert not r.success and r.reason == "limit_up_sealed"
+    assert b.buy("600000", 1.59, 100, "2026-08-03", pre_close=1.45).success
 
 
 def test_is_st_name():
@@ -73,7 +113,7 @@ def test_buy_at_limit_up_refused_sell_at_limit_down_refused():
 def test_chinext_301_limit_and_st_limit():
     b = Broker(_cost())
     assert b.buy("301001", 11.5, 100, FRI, pre_close=10.0).success  # 20% 板, 11.5 未涨停
-    r = b.buy("600000", 10.5, 100, FRI, pre_close=10.0, name="ST某某")
+    r = b.buy("600000", 10.5, 100, "2026-07-03", pre_close=10.0, name="ST某某")  # 新规前 5%
     assert not r.success and r.reason == "limit_up_sealed"
 
 
