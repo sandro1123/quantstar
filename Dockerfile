@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+# 与 CI 钉死的 3.11 对齐 (3.12 的 sum() Neumaier 与 3.11 存在位级差, 测的必须是发的)
+FROM python:3.11-slim
 
 WORKDIR /app
 

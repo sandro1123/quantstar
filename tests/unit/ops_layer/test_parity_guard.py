@@ -146,10 +146,10 @@ class TestParityActuallyIntercepts:
 # ---------------------------------------------------------------------------
 def _get_crontab_lines() -> list[str]:
     import os, subprocess
-    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
-        return ["daily_update", "marimo_daily_report", "marimo_weekly_report", "marimo_monthly_report", "dashboard_bitable_sync", "build_marimo_report.py", "build_ops_bitable.py", "--period weekly", "--period monthly"]
+    # 仓库内 deploy/quantstar-crontab 是唯一权威快照; CI 不再返回硬编码列表
+    # (旧实现 CI 下直接返回关键词清单, 快照漂移在 CI 永远是绿的)。
     from pathlib import Path
-    dep = Path("deploy/quantstar-crontab")
+    dep = Path(__file__).resolve().parents[3] / "deploy" / "quantstar-crontab"
     if dep.exists():
         raw = dep.read_text(encoding="utf-8")
         return [ln for ln in raw.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]

@@ -55,7 +55,7 @@ jobs:
         run: ruff check src/ --quiet
 
   build:
-    needs: [test, lint]
+    needs: [test, lint, security]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:

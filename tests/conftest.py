@@ -36,6 +36,9 @@ os.environ["QS_LLM_OFFLINE"] = "1"
 # delivery_layer.outbox.default_outbox_dir 每次调用读取此变量 (与 QS_TEST_DB 同款)。
 os.environ["QS_OUTBOX_DIR"] = os.path.join(_TEST_DB_DIR, "outbox")
 
+# LLM 用量账本 (provider_manager._ledger_write) 默认写 data/qs.db, 测试同样重定向
+os.environ["QS_LEDGER_DB"] = os.environ["QS_TEST_DB"]
+
 
 def pytest_addoption(parser):
     parser.addoption(
