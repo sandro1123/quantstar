@@ -340,7 +340,7 @@ class StrategyLayer:
             logger.debug(f"Factor correlation skip: {e}")
 
     def _stage_aggregate(self, ctx: StrategyStageContext) -> None:
-        """Stage 2: 权重载入 + 聚合 + recent_return 填充 + factor_daily 持久化 + IC 观测。
+        """Stage 2: 权重载入 + 聚合 + forward_return 填充 (仅 IC) + factor_daily 持久化 + IC 观测。
         produces: factor_daily, used_weights"""
         # 载入持久化因子权重 (IC feedback loop) — DB-backed (F3.2)
         from strategy_layer.feedback.persistence import WeightPersistence
@@ -358,9 +358,10 @@ class StrategyLayer:
 
         ctx.factor_daily = self.aggregator.aggregate(ctx.matrix, weights=ctx.used_weights, use_correlation_filter=True)
 
-        # 填充 recent_return (F3.2 断链1): 从 data_layer 读 T+N 前向收益,
-        # 供下方 IC 反馈与选股动量加成使用。当日的前向收益通常尚未实现 (为 None),
-        # 属正常; 真正的 IC 计算由 ops ic_feedback handler 在滞后日执行。
+        # 填充 forward_return (F3.2 断链1): 从 data_layer 读 T+N 前向收益,
+        # 只供下方 IC 观测使用, 绝不进入选股排序 (审计 S-1: 历史回放里是未来信号)。
+        # 当日的前向收益通常尚未实现 (为 None), 属正常; 真正的 IC 计算由
+        # ops ic_feedback handler 在滞后日执行。
         try:
             self.aggregator.fill_recent_returns(ctx.factor_daily, self.data_layer, ctx.date)
         except Exception as e:
@@ -392,8 +393,8 @@ class StrategyLayer:
             for fd in ctx.factor_daily:
                 for fname, fval in fd.factor_scores.items():
                     factor_scores_dict.setdefault(fname, {})[fd.code] = fval
-                if fd.recent_return is not None:
-                    forward_returns_dict[fd.code] = fd.recent_return
+                if fd.forward_return is not None:
+                    forward_returns_dict[fd.code] = fd.forward_return
             if factor_scores_dict and forward_returns_dict:
                 daily_ic = tuner.compute_ic(factor_scores_dict, forward_returns_dict)
                 wp.record_ic(daily_ic, sample_size=len(forward_returns_dict))

@@ -14,7 +14,7 @@ def _make_fd(code="000001.SZ", date="2024-01-02"):
     fd.code = code
     fd.date = date
     fd.factor_scores = {"momentum_20d": 1.0}
-    fd.recent_return = 0.05
+    fd.forward_return = 0.05
     fd.composite_score = 1.0
     fd.ml_score = 0.0
     return fd
@@ -85,7 +85,7 @@ class TestST01Halt:
         """无前向收益时 record_ic 也不调用 (与原行为一致)"""
         layer = self._layer()
         fd = _make_fd()
-        fd.recent_return = None
+        fd.forward_return = None
         with patch("strategy_layer.feedback.persistence.WeightPersistence") as wp_cls:
             wp = wp_cls.return_value
             wp.load_weights.return_value = {"momentum_20d": 0.5}
