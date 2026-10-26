@@ -38,6 +38,9 @@ def _event(action, review_id, user_id="sandro", message_id="om_original_card"):
 @pytest.fixture
 def hitl(tmp_path, monkeypatch):
     """内存库 + 出站网络全打桩"""
+    # 审批白名单 fail-closed 后, 通用流程测试默认用测试事件里的 open_id 作为白名单
+    monkeypatch.setenv("HITL_APPROVER_OPEN_IDS", "ou_abc")
+    monkeypatch.setattr(daemon, "_ALLOWLIST_WARNED", False)
     h = HumanInLoop(Database(":memory:"))
 
     @contextlib.contextmanager
@@ -279,3 +282,20 @@ class TestApproverHardening:
         resp = daemon.build_handler()._do_without_validation(_event("approve", review_id))
         assert hitl.get(review_id)["status"] == "pending"
         assert resp.toast.type == "error"
+
+
+class TestApproverFailClosed:
+    def test_no_allowlist_rejects_by_default(self, hitl, monkeypatch):
+        monkeypatch.delenv("HITL_APPROVER_OPEN_IDS", raising=False)
+        monkeypatch.delenv("HITL_ALLOW_ANY_APPROVER", raising=False)
+        review_id = _seed(hitl)
+        resp = daemon.build_handler()._do_without_validation(_event("approve", review_id))
+        assert hitl.get(review_id)["status"] == "pending"
+        assert resp.toast.type == "error"
+
+    def test_explicit_allow_any_opt_in(self, hitl, monkeypatch):
+        monkeypatch.delenv("HITL_APPROVER_OPEN_IDS", raising=False)
+        monkeypatch.setenv("HITL_ALLOW_ANY_APPROVER", "1")
+        review_id = _seed(hitl)
+        daemon.build_handler()._do_without_validation(_event("approve", review_id))
+        assert hitl.get(review_id)["status"] == "approved"

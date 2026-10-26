@@ -1,4 +1,9 @@
-"""多级 Guardrail — PII/合规/内容三级过滤"""
+"""多级 Guardrail — PII/合规/内容三级过滤
+
+输入端 (check_input) 只拦 PII: 新闻/公告里出现「内幕交易立案」「操纵市场」恰恰是
+风控专家最需要看到的风险信号, 不能因关键词整条丢掉 (2026-10-26 审计 P0-4)。
+合规/内容红线 (承诺收益、满仓推荐等) 作用在模型输出端 (check_output)。
+"""
 import re
 
 from common.logging import get_logger
@@ -16,19 +21,19 @@ PII_PATTERNS = [
     (r"(?<![\d.])1[3-9]\d{9}(?![\d.])", "手机号"),          # 11位手机号
 ]
 
+# 仅用于模型输出: 系统自己不得做出的表述 (承诺收益/声称掌握内幕/喊满仓)。
 COMPLIANCE_PATTERNS = [
-    ("内幕交易", "内幕交易"),
-    ("操纵市场", "市场操纵"),
-    ("保证收益", "保证收益"),
-    ("稳赚", "稳赚承诺"),
-    ("内幕", "内幕信息"),
+    (r"保证收益", "保证收益"),
+    (r"稳赚", "稳赚承诺"),
+    (r"(有|掌握|获得|拿到|提供)(了)?内幕(消息|信息)", "内幕信息"),
+    (r"(配合|一起|帮你)(拉升|操纵)", "市场操纵"),
 ]
 
 CONTENT_PATTERNS = [
-    (r"推荐.*满仓", "满仓推荐"),
-    (r"保证.*收益", "收益保证"),
-    (r"肯定.*涨", "肯定上涨"),
-    (r"100%.*机会", "百分百机会"),
+    (r"推荐.{0,6}满仓", "满仓推荐"),
+    (r"保证.{0,6}收益", "收益保证"),
+    (r"肯定(会)?(大)?涨(?!跌)", "肯定上涨"),
+    (r"100%.{0,6}(机会|上涨|盈利|赚)", "百分百机会"),
 ]
 
 
@@ -45,16 +50,31 @@ class GuardrailResult:
 class Guardrail:
     LEVELS = ["pii", "compliance", "content"]
 
-    def check(self, text: str) -> GuardrailResult:
+    def check_input(self, text: str) -> GuardrailResult:
+        """输入端: 只做 PII 检查, 不因风险关键词丢弃数据。"""
         result = GuardrailResult()
+        self._check_pii(text, result)
+        if not result.passed:
+            logger.warning(f"Guardrail blocked input: {result.flagged}")
+        return result
 
+    def check_output(self, text: str) -> GuardrailResult:
+        return self.check(text)
+
+    @staticmethod
+    def _check_pii(text: str, result: GuardrailResult) -> None:
         for pattern, desc in PII_PATTERNS:
             if re.search(pattern, text):
                 result.add("pii", desc, f"PII模式匹配: {pattern}")
 
-        for keyword, desc in COMPLIANCE_PATTERNS:
-            if keyword in text:
-                result.add("compliance", desc, f"合规关键词: {keyword}")
+    def check(self, text: str) -> GuardrailResult:
+        """完整检查 (PII + 合规 + 内容), 用于模型输出。"""
+        result = GuardrailResult()
+        self._check_pii(text, result)
+
+        for pattern, desc in COMPLIANCE_PATTERNS:
+            if re.search(pattern, text):
+                result.add("compliance", desc, f"合规红线: {pattern}")
 
         for pattern, desc in CONTENT_PATTERNS:
             if re.search(pattern, text):

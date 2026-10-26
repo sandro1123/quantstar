@@ -172,12 +172,13 @@ class AgentLayer:
         sanitized = self._sanitizer.sanitize(request.input)
         request.input = sanitized
 
-        # Guardrail 检查输入
+        # Guardrail 检查输入 (只拦 PII; 合规红线作用在模型输出端)
         guardrail = self._pm.guardrail if hasattr(self._pm, 'guardrail') else None
         if guardrail:
             for v in request.input.values():
                 if isinstance(v, str):
-                    gr = guardrail.check(v)
+                    check = getattr(guardrail, "check_input", guardrail.check)
+                    gr = check(v)
                     if not gr.passed:
                         logger.warning(f"Guardrail blocked: {gr.flagged}")
                         return self._fallback_response(request, f"Guardrail: {gr.flagged[0][1]}")
