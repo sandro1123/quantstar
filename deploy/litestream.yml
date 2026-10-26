@@ -1,0 +1,8 @@
+# P0-5: litestream -once 增量备份配置 (litestream 二进制原生格式, 非 QS config_layer)
+# 用法: ~/bin/litestream replicate -once -config deploy/litestream.yml
+# -once = Replicate once and exit (守禁常驻红线); 首次全量快照, 之后增量 WAL 帧。
+# 源库 qs.db 已是 WAL 模式 (litestream 硬前提); litestream 只读源库 WAL, 不写 qs.db。
+dbs:
+  - path: ~/qs/data/qs.db
+    replica:
+      path: ~/qs/data/backups/litestream

@@ -1,0 +1,88 @@
+{
+  "type": "object",
+  "properties": {
+    "trading_schedule": {
+      "type": "string"
+    },
+    "silent_mode": {
+      "type": "boolean"
+    },
+    "delivery": {
+      "type": "object",
+      "properties": {
+        "report_mode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "report_mode"
+      ],
+      "additionalProperties": true
+    },
+    "report": {
+      "type": "object",
+      "properties": {
+        "morning_brief": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "additionalProperties": true
+        },
+        "evening_report": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "evening_report",
+        "morning_brief"
+      ],
+      "additionalProperties": true
+    },
+    "strategy": {
+      "type": "object",
+      "properties": {
+        "agent_gate": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "agent_gate"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "delivery",
+    "report",
+    "silent_mode",
+    "strategy",
+    "trading_schedule"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from prod.yaml by gen_config_schemas.py"
+}

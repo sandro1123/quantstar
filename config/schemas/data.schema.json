@@ -1,0 +1,100 @@
+{
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "db_path": {
+          "type": "string"
+        },
+        "pipelines": {
+          "type": [
+            "null",
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "batch_size": {
+          "type": "integer"
+        },
+        "retry": {
+          "type": "object",
+          "properties": {
+            "max_retries": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "max_retries"
+          ],
+          "additionalProperties": true
+        },
+        "quality": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "change_pct_divergence": {
+              "type": "number"
+            },
+            "mad_multiplier": {
+              "type": "number"
+            },
+            "mad_field": {
+              "type": "string"
+            },
+            "zero_pct_batch_ratio": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "change_pct_divergence",
+            "enabled",
+            "mad_field",
+            "mad_multiplier",
+            "zero_pct_batch_ratio"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "batch_size",
+        "db_path",
+        "pipelines",
+        "quality",
+        "retry"
+      ],
+      "additionalProperties": true
+    },
+    "news": {
+      "type": "object",
+      "properties": {
+        "attribution_audit": {
+          "type": "object",
+          "properties": {
+            "enforce": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enforce"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "attribution_audit"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "data",
+    "news"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from data.yaml by gen_config_schemas.py"
+}

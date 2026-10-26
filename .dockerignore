@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.env
+.git/
+.gitignore
+logs/
+data/backups/
+tests/
+.venv/
+venv/
+*.md
+.vscode/
+.idea/opencode.json*
+*.key
+secrets/
+.ssh/
+*.pem

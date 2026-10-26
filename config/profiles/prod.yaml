@@ -1,0 +1,15 @@
+trading_schedule: full
+silent_mode: false
+
+delivery:
+  report_mode: production
+
+report:
+  morning_brief:
+    enabled: true
+  evening_report:
+    enabled: true
+
+strategy:
+  agent_gate:
+    enabled: true

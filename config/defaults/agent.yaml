@@ -1,0 +1,11 @@
+agent:
+  providers: {}
+  quality_tracking:
+    enabled: false
+    window_days: 90
+  cache_ttl_seconds: 300
+  max_workers: 8
+  analyze_timeout_s: 120
+  batch_timeout_s: 300
+  # AG-DEBATE-V2 ①: deep 档辩论轮次 (1=旧单轮, 2=两轮制互看修订; clamp 上界 2)
+  debate_rounds: 2

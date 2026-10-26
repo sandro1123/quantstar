@@ -1,0 +1,10 @@
+report:
+  morning_brief:
+    enabled: false
+    time: "08:00"
+  evening_report:
+    enabled: false
+    time: "17:00"
+  weekly_summary:
+    enabled: false
+    time: "Saturday 10:00"

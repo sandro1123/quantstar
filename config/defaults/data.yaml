@@ -1,0 +1,18 @@
+data:
+  db_path: "data/qs.db"
+  pipelines:
+  batch_size: 100
+  retry:
+    max_retries: 3
+  # DL-29: 数据质量闸规则集 (data_layer/quality.py 读取; 只标记不改原值)
+  quality:
+    enabled: true
+    change_pct_divergence: 1.0   # 百分点: change_pct 与 (close/pre_close-1)*100 背离阈值
+    mad_multiplier: 3.0          # 批内超 N 倍 MAD 判 outlier
+    mad_field: "change_pct"
+    zero_pct_batch_ratio: 0.5    # 批内 change_pct=0 占比超此值判整批清零异常 (07-29 模式)
+
+# #56 新闻归因审计哨兵 (news.py _audit_config 真链读; E三证死导入雷已修, 09-02凌晨补执窗挂键)
+news:
+  attribution_audit:
+    enforce: true

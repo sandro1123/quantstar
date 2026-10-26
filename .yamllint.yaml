@@ -1,0 +1,19 @@
+# P0-7 两段门禁 Stage-1: 结构完整性 lint (非风格检查)
+# 只拦真问题: 语法错误 / 重复键 / tab 缩进。风格项全关, 避免存量误报。
+extends: default
+rules:
+  document-start: disable
+  line-length: disable
+  new-line-at-end-of-file: disable
+  comments: disable
+  comments-indentation: disable
+  truthy: disable
+  braces: disable
+  brackets: disable
+  colons: disable
+  commas: disable
+  empty-lines: disable
+  hyphens: disable
+  indentation: disable
+  trailing-spaces: disable
+  key-duplicates: enable

@@ -1,0 +1,78 @@
+
+api_keys*.md
+api_keys_report.md
+/benchmark-*.md
+build/
+config/local.yaml
+.coverage
+.coverage.*
+coverage.xml
+data/backups/
+data/*.db
+data/*.db-journal
+data/*.db-shm
+data/*.db-wal
+data/factor_ic_results.json
+data/outbox/
+dist/
+.DS_Store
+*.egg-info/
+*.env
+.env
+htmlcov/
+# IDE
+.idea/
+/layer-*.md
+*.log
+logs/
+opencode.json
+opencode.jsonc
+# opencode 本地工作区配置(可能含 API key, 不进入仓库)
+/opencode-wb/
+# OS
+output/
+# 本机 infra: 数据库备份(13GB)与 cloudflared 隧道配置(引用本机凭证路径)
+/backup/
+/cloudflared-config.yml
+__pycache__/
+*.py[cod]
+# Python
+*.swo
+*.swp
+Thumbs.db
+.venv/
+venv/
+.vscode/
+/决策记录.md
+/开发指南.md
+/总设计文档.md
+# 数据
+/数据流全景.md
+# 日志
+# 测试覆盖率
+# 虚拟环境
+# 设计文档 (Obsidian 库，不追踪)
+# 输出
+# 配置
+/问题追踪.md
+/项目介绍.md
+
+# 战役工作脚本 (三步曲/DM/探针, 含回滚方案, 留磁盘作证据)
+scripts_tmp/
+
+# F6.5: 归档目录不入仓库 (历史评审/杂项留磁盘作证据; phase2 为 git mv 保留跟踪)
+docs/archive/
+
+# 本地编辑备份
+*.bak*
+
+# GO-7 运行时产物 (flock 锁文件 / 备份循环), 不入仓库
+locks/
+backups/
+__marimo__/
+
+# P0-7 配置漂移哨兵运行时快照 (基线+历史, 非源码)
+data/config_snapshots/
+
+# 嵌套 worktree 目录 (git add -A 事故防护, 2026-09-11)
+/qs-*/

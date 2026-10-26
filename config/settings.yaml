@@ -1,0 +1,6 @@
+# QuantStar 公共配置（CF-07 瘦身：仅保留有意覆盖项，其余由 defaults/ 提供）
+# 覆盖语义：defaults/*.yaml → settings.yaml → profiles/{env}.yaml → local.yaml
+
+strategy:
+  agent_gate:
+    enabled: false  # defaults/strategy.yaml 无此键；prod.yaml 覆盖为 true

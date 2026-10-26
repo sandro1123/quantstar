@@ -1,0 +1,81 @@
+{
+  "type": "object",
+  "properties": {
+    "delivery": {
+      "type": "object",
+      "properties": {
+        "report_mode": {
+          "type": "string"
+        },
+        "feishu": {
+          "type": [
+            "null",
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "retry": {
+          "type": "object",
+          "properties": {
+            "max_retries": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "max_retries"
+          ],
+          "additionalProperties": true
+        },
+        "channel_semantics": {
+          "type": "object",
+          "properties": {
+            "feishu_group": {
+              "type": "string"
+            },
+            "feishu_dm": {
+              "type": "string"
+            },
+            "ops_archive": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "feishu_dm",
+            "feishu_group",
+            "ops_archive"
+          ],
+          "additionalProperties": true
+        },
+        "default_deny": {
+          "type": "boolean"
+        },
+        "fan_out_types": {
+          "type": "array"
+        },
+        "push_rules": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "channel_semantics",
+        "default_deny",
+        "fan_out_types",
+        "feishu",
+        "push_rules",
+        "report_mode",
+        "retry"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "delivery"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from delivery.yaml by gen_config_schemas.py"
+}

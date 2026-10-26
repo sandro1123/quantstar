@@ -1,0 +1,822 @@
+# QuantStar 管道定义
+# 每个管道声明：调度时间、依赖、超时、重试
+# crontab 根据 schedule 触发 `python -m src pipeline run <name>`
+
+ops:
+  # QS 卡 holiday-early-exit-gate (Day2, 2026-10-07): 假日白名单 (声明式,
+  # 判例 #159 豁免须受管)。名单内管道假日照跑 (运维面); 未列管道假日由
+  # data_layer.holiday_gate 早退 (skipped + 'non-trading day' 可见痕迹)。
+  # 判据: 快照类源假日贴键两型 (moneyflow 型贴请求日键有害 — 10-02/05/06
+  # 实证 5 表 10695 行假日假数据)。
+  holiday_exempt_pipelines:
+    - db_backup
+    - incremental_backup
+    - restore_drill
+    - disk_check
+    - log_rotation
+    - marimo_daily
+  pipelines:
+
+    # ─── 盘前 ──────────────────────────────────────
+    morning_brief:
+      schedule: "08:00"
+      days: "1-5"            # 周一至周五
+      depends_on: []
+      # F5.1/F5.3: 统一管线 + LLM 增强后, 含新闻采集(30s)+多 LLM section(各20s), 60s 不够
+      timeout_s: 180
+      max_retries: 2
+      retry_delay_s: 30
+      description: "早报推送：隔夜外盘 → 今日要闻 → 大盘指数 → 市场预判 → 板块关注 → 今日计划 → 风险提示"
+
+    pre_market_refresh:
+      schedule: "09:00"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 120
+      max_retries: 2
+      retry_delay_s: 30
+      description: "盘前数据刷新：检查交易所连接、刷新最新数据"
+
+    # 报告宪法 #7 (2026-09-10 第一波): 盘前速报 09:25 — 集合竞价阶段扫描
+    # 昨日推荐+观察池 (auction_snapshot 数据面), 竞价快评+操作指引。
+    premarket_brief:
+      schedule: "09:25"
+      days: "1-5"
+      depends_on: ["auction_parse"]
+      # G8 2026-10-23: 60s → 180s (与晨报/晚报对齐; 原60s对 LLM 腿偏紧)
+      timeout_s: 180
+      max_retries: 1
+      retry_delay_s: 15
+      description: "盘前速报：竞价快评昨日推荐+观察池，逐票操作指引"
+
+    auction_parse:
+      schedule: "09:25"
+      days: "1-5"
+      depends_on: ["pre_market_refresh"]
+      timeout_s: 30
+      max_retries: 1
+      description: "集合竞价解析：检查 pending_entry 的竞价结果"
+
+    morning_review:
+      schedule: "09:35"
+      days: "1-5"
+      depends_on: ["auction_parse"]
+      # G8 2026-10-23: 60s → 180s (与晨报/晚报对齐; 原60s对 LLM 腿偏紧)
+      timeout_s: 180
+      max_retries: 1
+      description: "开盘速报：推荐票开盘情况 → 操作建议 → 盯盘重点"
+
+    # ─── 盘中 ──────────────────────────────────────
+    midday_brief:
+      schedule: "12:00"
+      days: "1-5"
+      depends_on: []
+      # F5.1: 统一管线 + gtimg 实时指数后放宽超时
+      # G8 2026-10-23: 120s → 180s (P90=29s Max=46s 近30次; 拥塞日需余量)
+      timeout_s: 180
+      max_retries: 1
+      description: "午间速报：上午盘面 → 持仓表现 → 板块轮动 → 下午预案"
+
+    # 卡VII: 尾盘投顾 (统筹裁定 sm-c525b45463d94435) — 14:52 非整点, 只读,
+    # 无依赖 (投顾只看不动, 不等数据链), 同链 report_layer build+push。
+    tail_advisory:
+      schedule: "14:52"
+      days: "1-5"
+      depends_on: []
+      # G8 2026-10-23: 60s → 180s (与晨报/晚报对齐; 原60s对 LLM 腿偏紧)
+      timeout_s: 180
+      max_retries: 1
+      description: "尾盘投顾：午后实时候选/持仓现况，尾盘决策参考（只读）"
+
+    # ─── 盘后 ──────────────────────────────────────
+    end_of_day:
+      schedule: "15:05"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 120
+      max_retries: 2
+      retry_delay_s: 30
+      description: "收盘处理：全量出场检查、PnL 更新、日内检查汇总"
+
+    post_market:
+      schedule: "15:10"
+      days: "1-5"
+      depends_on: ["end_of_day"]
+      timeout_s: 60
+      max_retries: 1
+      description: "盘后数据后处理：未覆盖数据的补充更新"
+
+    daily_data_pipeline:
+      schedule: "15:30"
+      days: "1-5"
+      depends_on: []
+      # OPS-02: 1500→2400 — 近3天实际耗时都顶到1500超时(analyst_forecasts单源15min+),
+      # 超时误判 failed 制造僵尸+下游断链; 慢源根治属数据层(见跨层契约)
+      # OPS-02/G3-T1: 2400→2700 — pipeline_runs 实测超时截断堆积是预算指纹非真实耗时,
+      # 真实完成区间[960,1430]s(08-21重试成功957s); 2700=1430x1.9余量, 再大顶到17:00晚报窗。
+      # 真正杠杆=T1.5查首轮为何跑不完(疑似子管道卡等待), 今日15:30实测后校准。
+      timeout_s: 2700
+      max_retries: 1
+      # DL-65 coupling warning: changing max_retries changes ddp window ceiling
+      # (budget = timeout_s x (max_retries+1) + grace_s). Must re-derive
+      # the full write-schedule table before implementing. Do NOT merge standalone.
+      retry_delay_s: 30
+      description: "每日数据采集：K线 + 财务 + 估值 + 资金流"
+
+    # DL-51: kline 顶层备源补跑 — 与 daily_data_pipeline 的子管线 kline 同名但语义不同:
+    # 子管线是主采集链的一环; 顶层是 17:40 的独立补跑 (baostock 日K 17:30 才入库,
+    # 主源 15:30 挂时由此兜底)。幂等: 主源已成功则覆盖检查 (market_covered 98%)
+    # 短路返回 success, 不重复写。
+    kline:
+      schedule: "17:40"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 600
+      max_retries: 1
+      retry_delay_s: 60
+      # wait_timeout_s: 备源兜底语义 — ddp 17:40 仍持锁时等待释放再跑, 不可 flock -n 锁冲突即 skip (否则兜底失效)
+      wait_timeout_s: 300
+      description: "K线备源补跑：主源15:30失败时由baostock(17:30入库)兜底，幂等短路"
+
+    # 锁饿死止血 (2026-09-25, 估值断供卡衍生)。
+    #
+    # 病: daily_update 是一片"都会等锁"的兄弟腿中间唯一的**孤儿固定时点**——
+    # 既无 wait_timeout_s 也无 depends_on。DDP 因 K 线/估值断供每天跑两轮
+    # (15:30 获锁, 横跨 max_retries 两轮, 且锁在 runs 行写完后仍持有, 09-21
+    # 实测 17:00 仍持锁), 必然横跨 16:16 → **09-21~24 连续四个交易日
+    # skipped_lock**, consume_approved 未跑, 35 单批准积压, 全程零告警。
+    #
+    # 正反六条腿实证「wait_timeout_s 是否 > 上游实际持锁时长 = 这条腿活还是死」:
+    #   活: factor_update / daily_backtest / paper_trading = 7200
+    #   死: emotion_cycle=300 (末次成功 09-18) / news_per_stock=600 (末次成功 09-14)
+    #   死得最彻底: daily_update 无键 → flock -n 非阻塞, 连 wait_timeout 事件都没有
+    # 故取 7200 = **照同族三条活腿既有值, 不另发明数字**。
+    #
+    # ★ 本段存在的唯一目的是让 flock_guard.sh 读到 wait_timeout_s ——
+    #   它只读 ops.pipelines.<key>.wait_timeout_s, 写在 cron_watchdog.overrides
+    #   里对 flock 完全无效 (两个键两个消费者)。
+    # ★ timeout_s 必须**显式**写 300: 加本段会把 cron_watchdog 的预算派生从
+    #   ELSE(overrides) 分支翻到 IF(pipelines) 分支; 不写则回落 default_timeout_s,
+    #   虽恰好也是 300 但那是巧合不是设计 (实测三案预算均 420s)。
+    # ★ **不配 depends_on**: daily_update 走 cron 直驱脚本
+    #   (`python -m src.execution_layer.scripts.daily_update`), 不经 orchestrator,
+    #   `can_run` / `wait_for_dependencies` 对它不生效 —— 配了是摆设。
+    #   "当天 16:16 消费的是昨日批准单"这个语义错位属结构修, 另卡。
+    daily_update:
+      schedule: "16:16"
+      days: "1-5"
+      timeout_s: 300
+      max_retries: 0
+      retry_delay_s: 0
+      wait_timeout_s: 7200
+      description: "盘后更新：消费已批准审核单入池 + 观察池过期 + T+1 结算"
+
+    # 丙件 (2026-09-25): 估值顶层补跑腿 — 主跑残缺时逐股兜底。
+    # 病: tushare bulk 限流 → 当日 kline 只写 ~1/3 → valuation 主跑采到
+    # 1908/5553 (34%) 判 failed, **当日缺口=终态** (T+1 不补, 09-17 的 1785 行
+    # 到 09-18 仍是 1785)。DL-51 给 kline 配了 17:40 兜底, valuation 漏配。
+    # 排 17:45 (kline 17:40 之后): 复用 DL-51「17:30 入库 → 17:40 兜底」同族
+    # 时序窗, baostock 估值此时稳定可取。
+    # 幂等: 缺口率 < 2% 短路零开销 (主跑成功日不跑); 断供日缺口 34%~66% 必补。
+    # wait_timeout_s 同 kline=300: 备源兜底语义, 不可锁冲突即 skip。
+    valuation_backfill:
+      schedule: "17:45"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 900
+      max_retries: 1
+      retry_delay_s: 60
+      wait_timeout_s: 300
+      description: "估值补跑：主跑被限流采不满时由baostock逐股补缺口，幂等短路"
+
+    # R4 concept 断电案 (统筹 sm-39c8b41402a748ee): zzshare 真概念每日通电 —
+    # 独立 16:35 顶层小管道 (与 #81 c-1 analyst 拆分案同构, GO-7 硬闸语义保持:
+    # registry 单独调起 + 独立排程, 不进 DAILY_SUB_PIPELINES)。
+    # 窗: 15:30 DDP concept child (~15:45 本地 fallback 秒级写完) 之后、
+    # 16:20/16:22 DL-33 双门禁之前、16:52 agent_evaluate 之前。
+    # 写锁实测 (R3 冒烟): fetch 142s 锁外 / 写锁 30s — 16:40 前净退。
+    # 17:05 写后校验哨兵 (issues daily 链) 对治时序颠倒 fallback 混回。
+    # 刀2 (fix/anomaly-1630-recollect, 派单 sm-7c5089a73bd44eaf):
+    # shortterm 快照六项 16:30 补采轮 — anomaly 等端点无日期参数 (纯当日
+    # 快照), 上游发布晚于 15:44 首轮窗即永久丢 (DL-07 不可回填;
+    # 09-29 16:48 采得 200 行 vs 10-09 15:44 空实证)。10-19 anomaly
+    # 402 行坐实当日更晚时刻数据在 — 补采轮补回「源在但漏」。
+    # 独立顶层小管道 (照 concept_plates_daily 先例, 不进
+    # DAILY_SUB_PIPELINES, GO-7 硬闸语义保持)。只跑快照六项
+    # (_snapshot_collectors 单一事实源), 不碰 kline/valuation 主腿。
+    # 幂等 INSERT OR REPLACE, 同日同键以补采轮为准 (更晚快照) 且覆盖
+    # 留痕 (recollect_overwrote, 不静默覆盖)。
+    # 窗: DDP 实测 15:30→15:44 (~14min) 后 46min 隔离; 16:20/16:22
+    # DL-33 双门禁之后 (不扰门禁首轮读数)。
+    shortterm_recollect:
+      schedule: "16:30"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 600
+      max_retries: 1
+
+    concept_plates_daily:
+      schedule: "16:35"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 600
+      max_retries: 1
+      retry_delay_s: 60
+      wait_timeout_s: 120
+      description: "zzshare真概念每日通电：concept_plates独立小管道，先删当日fallback后写真概念(16:35错峰DDP)"
+
+    # 件2 (09-02 统筹 sm-8683e2dff09a4717): concept_membership 区间存储通电 —
+    # 独立 17:05 顶层小管道 (照 R4 concept_plates_daily 先例, GO-7 硬闸语义
+    # 保持: 不进 DAILY_SUB_PIPELINES)。08-31 调研卡「代码全有库里全无」收口:
+    # DDL 幂等自建表, 读侧 _loader 探测到表即自动升级区间 PIT 口径。
+    # 窗: 16:35 真概念写完 (~16:40 净退) 后 30min 隔离 (zzshare 同源限流
+    # 分摊面错开), 16:52 agent_evaluate 之前。回补腿另窗统筹裁。
+    concept_intervals_daily:
+      schedule: "17:05"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 900
+      max_retries: 1
+      retry_delay_s: 60
+      wait_timeout_s: 1800
+      description: "concept_membership区间存储每日通电：一次拉取历史进出板全史，INSERT OR REPLACE幂等(17:05错峰16:35真概念)"
+
+    # #101 LLM读图影子 (F 切2 698f049): 候选集(signal_provenance当日∪stock_pool未出场)双录 chart_analysis (atr_floor+llm_chart)。
+    # 独立顶层小管道 (照 concept_intervals_daily 先例)。窗: 19:05 (kline 17:40 后; adjust_factor 18:30~18:41 与
+    # analyst LLM 通道双错峰; 18:35~22:05 空窗)。LLM 单次耗时未实测: ~30 候选×5~20s 估 150~600s, timeout 1200 保守,
+    # 首跑 pipeline_runs.duration 即实测数。幂等 INSERT OR REPLACE 重跑自愈; per-候选 LLM 慢/失败→degraded 公式值不炸管道。
+    chart_analysis:
+      schedule: "19:05"
+      days: "1-5"
+      depends_on: [kline]
+      timeout_s: 1200
+      max_retries: 1
+      retry_delay_s: 60
+      wait_timeout_s: 120
+      description: "#101读图影子：候选集(signal_provenance当日∪stock_pool未出场)双录chart_analysis，LLM失败降级公式值"
+
+    # KLINE-FX 结构修 (统筹 2026-09-07): 17:40 kline 兜底后的因子终算哨。
+    # 病: baostock 日K 17:30 才入库 → 主源部分日 16:00 factor_update 在毒面跑
+    # (09-07 实证 523/5548 → 宁缺毋假只算 523) → 17:40 kline 补满后无重跑排程。
+    # 修: 18:05 条件补跑 factor_update + fwd_return_backfill, 幂等守卫短路
+    # (因子行≥K线行即 skip, 正常日零开销)。窗: 17:40 kline (实测 1.7s~5min) 之后、
+    # 18:30 adjust_factor 之前; 重跑耗时上限 239s+30s (18:42 实测) → 18:15 前净退。
+    # ─── 情绪素材采集 (卡C 通电试 2026-09-25) ──────────────
+    # 背景: 管道 09-12 已备 (DDL 自建 + 诚实降级, b 案单腿) 但零注册零调度,
+    # 两表种子 100/20 行停 09-12; G2 (09-20) 裁定停备留活口; 探活 True (09-25)。
+    # 用户批「通电试」→ 试跑 3 交易日观察数据面/降级路径后再定去留。
+    # 调度理由见文件头注释: 避 16:00-17:35 堵塞带, 夜间窗 18:35 (与 18:30
+    # adjust_factor 错峰, 18:40 marimo 不争锁, 距 19:00 evening_ingest 余 25min)。
+    adata_sentiment:
+      schedule: "18:35"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 900
+      max_retries: 1
+      retry_delay_s: 60
+      wait_timeout_s: 300
+      description: "adata 情绪素材采集(人气榜+热门概念), 诚实降级, 试跑观察期"
+
+    fx_settlement:
+      schedule: "18:05"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 900
+      max_retries: 1
+      retry_delay_s: 60
+      wait_timeout_s: 300
+      description: "K线兜底后因子终算：主源部分日的 factor/fwd 缺口自愈，正常日幂等短路"
+
+    # DL-51: adjust_factor 顶层每日增量 — baostock 复权因子 18:00 入库, 故排 18:30。
+
+    # 独立管道不并入 daily_data_pipeline (主采集跑时当日复权因子尚不存在)。
+    adjust_factor:
+      schedule: "18:30"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 300
+      max_retries: 2
+      retry_delay_s: 60
+      # wait_timeout_s: 保险 — 18:30 与上游写锁冲突概率低, 但幂等管道等 120s 无害
+      wait_timeout_s: 120
+      description: "复权因子每日增量：baostock复权因子/分红/送转(18:00入库)，幂等可回补"
+
+    # DDP c-1 (#81 两连超时修复, 统筹 sm-6e53bd96df784290): analyst_forecasts
+    # 拆出 DDP 串行链 → 独立顶层管道。DDP 串行需求 2738→908s / 3223→1393s,
+    # 三天实测全回现有 2700 预算内 (设计稿 §5: DDP timeout 2700 维持, 第二刀缓行)。
+    # 窗 16:55 = 错峰 16:52 agent_evaluate 同刻; 自身 ~1830s → ~17:26 收官,
+    # 与 dev_verify_report(17:15)/ops_report(17:30) 只读无锁冲突 (设计稿 §4c-1)。
+    # timeout_s 1900 与 data_layer _capability_timeout 双钉对齐 (实测 1824.4/
+    # 1829.4s σ≈2.5s)。重试边缘: max_retries=1 最坏 ~17:59 重叠 17:40 kline
+    # — kline wait_timeout_s=300 等锁兜底, analyst 写锁单事务短持有。
+    analyst_forecasts:
+      schedule: "16:55"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 1900
+      max_retries: 1
+      retry_delay_s: 60
+      # wait_timeout_s: 保险 — 16:55 与上游写锁冲突概率低 (DDP 15:30 段通常已收)
+      wait_timeout_s: 120
+      description: "研报共识每日采集：东财逐码~30min固定成本，拆出DDP串行链16:55独立错峰"
+
+    factor_update:
+      schedule: "16:00"
+      days: "1-5"
+      depends_on: ["daily_data_pipeline"]
+      # OPS-02: 15000(4.2小时)是异常值, 修正为1800(30分钟, 实测因子计算量级)
+      timeout_s: 1800
+      max_retries: 2
+      retry_delay_s: 60
+      # ①(a) per-key flock 等待: ddp 锁窗内遇锁等待而非 skip (统筹裁定 sm-910a6a0e07104b0c)
+
+      wait_timeout_s: 7200
+
+      description: "因子计算 + 聚合 + ML 评分 + 选股 + 信号生成 + WatchPool 写入"
+
+    fwd_return_backfill:
+      schedule: "16:10"
+      days: "1-5"
+      depends_on: ["factor_update"]
+      timeout_s: 300
+      max_retries: 2
+      retry_delay_s: 30
+      wait_timeout_s: 7200
+
+      # 09-02 统筹: 3→20 — 20d horizon 兑现日回看20交易日, 深窗自愈覆盖全五horizon (幂等多跑无害)
+      catchup_days: 20
+
+      # DL-34 (D-34): 每日为"刚兑现"的日期回填 fwd_return_1d/5d/20d 到 factor_daily。
+      # 必须排在 factor_update 之后 (回填写的是 factor_daily 的列, 因子须先算完)。
+      # 复用 data_layer.backfill_fwd_returns (幂等, 仅写 NULL, 未兑现保持 NULL)。
+      # 历史全量回补走 scripts/backfill_fwd_returns_history.py (写库, 需 GO-9)。
+      description: "前向收益每日回填：T 日收盘后为 T-1/T-5/T-20 已兑现日期回填 fwd_return"
+
+    # REC 通电卡 (2026-09-24): 每日一致性守护 + 覆盖率 (推荐跟踪器「每日自问」
+    # 的载体)。挂 retrospect_settlement 同族 (盘后回看推荐语义契合)。此前
+    # consistency_check()/coverage() 生产零调度 → 「每日自问」无载体。
+    # crontab 实挂由统筹 22:05 窗亲挂 (编排面变更纪律)。
+    rec_tracking_daily:
+      schedule: "17:40"
+      days: "1-5"
+      depends_on: ["retrospect_settlement"]
+      timeout_s: 180
+      max_retries: 1
+      retry_delay_s: 30
+      wait_timeout_s: 600
+      description: "REC 推荐跟踪每日守护：一致性自问 + 覆盖率 (通电卡)"
+
+    retrospect_settlement:
+      schedule: "17:35"
+      days: "1-5"
+      depends_on: ["fwd_return_backfill"]
+      timeout_s: 300
+      max_retries: 1
+      retry_delay_s: 30
+      wait_timeout_s: 1800
+
+      # #112: recommendation_retrospect 结算通电 (08-27 684 行一次性回填后停摆收口).
+      # INSERT 新推荐档案 + UPDATE only-NULL 增量结算, AG-01 canonical 口径,
+      # 幂等重跑零副作用。挂 fwd_return_backfill 下游、agent_evaluate (16:52)
+      # 之后错峰 (17:35, 统筹 sm-d6b17c7f 锁窗裁定: 避 analyst 16:55 持锁窗 + daily_ops_report 17:30)。
+      description: "推荐回溯结算：新档案建档 + 未结算行补 fwd_return/hit (AG-01)"
+
+    agent_evaluate:
+      schedule: "16:52"
+      days: "1-5"
+      depends_on: ["fwd_return_backfill"]
+      timeout_s: 300
+      max_retries: 1
+      retry_delay_s: 60
+      # DL-72(a): update-type pipeline - writes back agent_predictions.actual_return/hit, no new table.
+      # Success criterion: COUNT(agent_predictions WHERE actual_return IS NOT NULL) increases (not produces-table row count).
+      # Schedule defined here; crontab trigger line to be added after GO-7 first verification (one variable at a time).
+      description: "Agent prediction evaluation: write back agent_predictions.actual_return/hit (DL-72, update-type pipeline)"
+
+    quality_check:
+      # W2 卡③ (2026-09-21): 16:20 → 17:50 — 病根是 16:20 判定时 DDP 16:00 批
+      # 只落一半 (detail 记覆盖率 8.7~34.6%<85% fail, 补采后终态 95.4%, 五天
+      # 假阳每晚进 21:07 日报 S5 段)。修法 = 判定时点挪到 17:40 kline 备源
+      # 补跑 (baostock 17:30 入库, 实测最长 5min) 之后, 保持全系统
+      # 「判定时点 ≥ 数据到位时点」一个口径 (与 e2e DDP 项同族同修法)。
+      # depends_on 不挂 kline: 它是 cron 直驱非 ops 编排腿, 挂上=假依赖
+      # (concept_plates_daily 16:35 「窗口+错峰」先例, 时点错峰已足够)。
+      schedule: "17:50"
+      days: "1-5"
+      depends_on: ["daily_data_pipeline"]
+      timeout_s: 120
+      max_retries: 1
+      wait_timeout_s: 7200
+
+      # DL-33 (D-33): 校验类独立管道, 排在 daily_data_pipeline 之后。
+      # 检查当日采集数据完整性/格式合规性, 结果落 quality_checks 表。
+      description: "数据质量门禁：检查当日采集数据完整性/格式合规性 (DL-33)"
+
+    freshness_audit:
+      schedule: "16:22"
+      days: "1-5"
+      depends_on: ["daily_data_pipeline"]
+      timeout_s: 120
+      max_retries: 1
+      wait_timeout_s: 7200
+
+      # 哨兵④ (09-05): stock_financials 公告新鲜度 — 独立键
+      # stock_financials_announce, 按 MAX(announce_date) 而非报告期末日
+      # (旧口径恒滞后 95,040min 假警报)。阈值可调; 月列表=A 股披露窗
+      # (季报集中披露月开始月), 修改前先查交易所披露规则。
+      # 注意: 此段为 freshness_audit 专段独立块 — 与其他分支的 ops.yaml
+      # 改动 (排程/其他阈值) hunk 不重叠。
+      announce_fiscal_season_months: [1, 4, 7, 8, 10]
+      announce_in_season_stale_days: 3
+      announce_off_season_stale_days: 45
+
+      # DL-33 (D-33): 校验类独立管道, 排在 daily_data_pipeline 之后。
+      # 检查主链路表数据是否当日到位, 结果落 freshness_audit 表。
+      description: "数据新鲜度审计：检查主链路表数据是否当日到位 (DL-33)"
+
+    ic_feedback:
+      schedule: "16:15"
+      days: "1-5"
+      depends_on: ["factor_update"]
+      timeout_s: 120
+      max_retries: 2
+      wait_timeout_s: 7200
+
+      description: "IC 反馈调权：60 天滚动 ICIR → 调整因子权重"
+      # GO-F 收尾 (2026-08-26): IC 度量周期切 10d — fwd_return_10d 全量
+      # 回补完成 (覆盖率 55.17%=可填物理上限)。
+      # #108 (2026-09-03): strategy.ic_horizon 嵌套撤出管道块 — handler
+      # 读法改 Config 全键空间属主 (orchestrator _cfg_all, 先例
+      # _dep_data_probe_enabled), 生产值迁 local.yaml strategy.ic_horizon
+      # (config 门控键不再寄居调度块)。
+
+    # AG-NEWS 运营段 (2026-09-13 注册面补齐, 统筹 sm-d7b43861): 个股新闻
+    # 增量拉取 — 昨荐+活仓面 ~30 只经 PipelineInput.symbols 透传 per_stock_em 腿
+    # (codes=None 不拉防打爆). 17:00 = DDP 15:30+2700s 窗末后稳避重叠.
+    # 注册面三件之一: 本定义 + orchestrator handler + schedule_check 对账.
+    news_per_stock:
+      # AUD-017 crash-family fix (coordinator 09-14): 17:00 contends with analyst_forecasts (1564s leg) - 600s wait fallback; stagger evaluation queued for the 22:05 window.
+      wait_timeout_s: 600
+      schedule: "17:00"
+      days: "1-5"
+      depends_on: ["daily_data_pipeline"]
+      timeout_s: 300
+      max_retries: 1
+      retry_delay_s: 60
+      description: "个股新闻增量拉取：昨荐+活仓面 ~30 只，per_stock_em 腿 (东财域)"
+
+    # F 席 ST-REGIME 留痕产线 (2026-09-13 注册面补齐): 情绪周期五阶段留痕.
+    # 16:35 factor_update 后 (判定核吃 factor 面), unknown 也落库 = 诚实留痕.
+    emotion_cycle:
+      # AUD-017 crash-family fix (coordinator 09-14): 16:35 contends with concept_plates_daily (261s leg) for the write lock - flock_guard wait mode, acquires within 5min.
+      wait_timeout_s: 300
+      schedule: "16:35"
+      days: "1-5"
+      depends_on: ["factor_update"]
+      timeout_s: 120
+      max_retries: 1
+      retry_delay_s: 30
+      description: "情绪周期留痕：梯队/zt/dt 五阶段判定落 emotion_cycle_daily (unknown 也落库)"
+
+    daily_backtest:
+      schedule: "16:30"
+      days: "1-5"
+      depends_on: ["factor_update"]
+      timeout_s: 300
+      max_retries: 2
+      retry_delay_s: 30
+      wait_timeout_s: 7200
+
+      description: "每日回测验证：Hold 模式 + Signal 模式"
+
+    paper_trading:
+      schedule: "16:35"
+      days: "1-5"
+      depends_on: ["factor_update"]
+      timeout_s: 300
+      max_retries: 2
+      retry_delay_s: 30
+      wait_timeout_s: 7200
+
+      description: "纸交易（BT-12）：消费当日 stock_pool 真实推荐信号模拟执行 + 滑点实测（落库需 backtest.paper_trading.enabled）"
+
+    # W2 补偿腿 (2026-09-19 审计立卡): 16:35 paper_trading 被 skip 的当日补跑。
+    # 病根: 09-10/09-11 DDP failed → factor_update skipped → paper_trading skipped
+    # → 当日 PTS total_signals=None (信号消费永久丢失, 无补偿腿)。
+    # 窗: 18:20 = fx_settlement(18:05, 含因子补算) 之后 — 因子面补齐后才消费信号,
+    # 与 16:35 首跑同代码路径; 19:00 evening_ingest / 20:00 晚报之前净退。
+    # depends_on: [] 是核心 — 断链日依赖必 skip, 有依赖等于没修。
+    # W2-1 (2026-09-20): 收盘后 execution_stats 收尾腿。
+    # 病: save_daily 挂 daily_update 16:16, 而 entry 由 paper_broker 16:35 写
+    #     → executed_entries 恒 0 (09-14~09-18 生产实证)。
+    # 治: 本腿在 16:35 paper_trading 之后幂等重算当日统计。
+    stats_finalize:
+      schedule: "16:45"
+      days: "1-5"
+      depends_on: ["paper_trading"]
+      timeout_s: 120
+      max_retries: 1
+      retry_delay_s: 30
+      wait_timeout_s: 1800
+
+      description: "收盘后 execution_stats 幂等重算 (取 paper_trading 之后, 保证 entry 已落库)"
+
+    evening_paper_trading:
+      schedule: "18:20"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 600
+      max_retries: 1
+      retry_delay_s: 60
+      wait_timeout_s: 300
+      description: "纸交易补偿腿：16:35 断链日的当日补跑，幂等守卫短路正常日"
+
+    evening_ingest:
+      # 早盘后源可能仅发布 T-1；独立晚间补采，不依赖 DDP 成功。
+      # 实际 crontab 安装须另获部署授权，配置声明本身不等于已通电。
+      schedule: "19:00"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 600
+      max_retries: 1
+      retry_delay_s: 60
+      description: "晚间补采指数日线与龙虎榜，按业务日期及腿级状态验收"
+
+    evening_report:
+      # 宪法 #3 (2026-09-10 第一波): 晚报时间=交易日 20:00 (提前于 21:30 定稿)。
+      # 旧 16:45 槽位空出; crontab 行由统筹窗内亲执 (本卡只改代码内调度配置)。
+      schedule: "20:00"
+      days: "1-5"
+      depends_on: ["factor_update", "daily_backtest"]
+      # G8 2026-10-23: 120s → 180s (P90=41s Max=48s(近30次), 佣塞日曾达120s+; 180=P90×4.4)
+      timeout_s: 180
+      # C 2026-10-23: max_retries 2 → 0 —— 近30天实测 4 fails / 3 timeout,
+      #   是报告层唯一有实证超时失败的腿。重试是**完整重跑**
+      #   (orchestrator:594 每轮重新 submit handler), 超时重试把 180s 变
+      #   540s 且不治根因 (超时=预算不够或下游慢, 非瞬时故障)。
+      #   根因治疗见 G9 reasoning_floor。
+      max_retries: 0
+      retry_delay_s: 15
+      wait_timeout_s: 7200
+
+      description: "晚报生成并推送：盘面总结 → 今日操作 → 个股精选 → 退出复盘"
+
+    dev_verify_report:
+      schedule: "17:15"
+      days: "1-5"
+      # 当日截面验证依赖因子完成，不依赖 20:00 才生成的晚报。
+      depends_on: ["factor_update"]
+      # G8 2026-10-23: 60s → 180s (与晨报/晚报对齐; 原60s对 LLM 腿偏紧)
+      timeout_s: 180
+      # analyst 16:55 持锁 ~31min 吞 17:15 槽 (09-03 skipped_lock 铁证); 1200=等至 17:35 内
+      # 让 analyst 尾 1852s+裕度; 超时=analyst 回退拆分量级的有用告警非病。
+      wait_timeout_s: 1200
+      max_retries: 1
+      # 案A缩面 (2026-09-02): run_daily 全量镜像→核心链当日截面直查 (factor/kline/估值/指数+pool台账),
+      # 零 run_daily 零计算链。实测墙钟 0.003s (qs-dvl/logs/dv_smoke_prod_ro.txt), 60s 预算裕度 >99%。
+      # 旧 4天6连60s整秒超时根因=DevCompareSection 调 run_daily (60s 内跑不完 200s+ 级全量链)。
+      description: "Dev 环境验证（轻量切片）：核心链当日截面新鲜度直查，非重跑"
+
+    daily_ops_report:
+      schedule: "17:30"
+      days: "1-5"
+      # W2-3 (2026-09-19): 剔除 evening_report 倒挂依赖 — 日报 17:30 依赖晚报
+      # 20:00 = 结构性每天 skipped (09-15~18 四连实证); build_ops_report 消费
+      # 运维统计/健康/告警面, 零消费晚报内容, 依赖本就冗余。daily_backtest
+      # (15:55) 早于 17:30, 保留。
+      depends_on: ["daily_backtest"]
+      # G8 2026-10-23: 60s → 180s (与晨报/晚报对齐; 原60s对 LLM 腿偏紧)
+      timeout_s: 180
+      max_retries: 1
+      description: "运维日报：各层健康 + 运行记录 + 版本 + 需关注"
+
+    # ─── 仪表盘（a+c 双轨，2026-08-27 立项，施工稿见 vault 分层讨论/深挖报告-20260826/仪表盘施工稿-20260827.md）───
+    dashboard_bitable_sync:
+      schedule: "17:45"
+      days: "1-5"
+      depends_on: ["daily_ops_report"]
+      timeout_s: 120
+      max_retries: 1
+      description: "运维仪表盘 Bitable 同步：运行矩阵+日报摘要+告警+信号总览"
+
+    marimo_daily_report:
+      schedule: "17:50"
+      days: "1-5"
+      depends_on: ["daily_ops_report"]
+      timeout_s: 600
+      max_retries: 1
+      description: "Marimo 静态深度报告：7 页 HTML 生成+归档+飞书摘要卡"
+
+    marimo_weekly_report:
+      schedule: "08:30"
+      days: "6"
+      depends_on: ["weekly_summary"]
+      timeout_s: 600
+      max_retries: 1
+      description: "Marimo 周报：IC 变化/命中汇总/运维周历/告警聚合"
+
+    marimo_monthly_report:
+      schedule: "22:45"
+      days: "1"
+      depends_on: ["monthly_report"]
+      timeout_s: 900
+      max_retries: 1
+      description: "Marimo 月报：绩效/因子轮换/纸面交易 vs 基准"
+
+    db_backup:
+      schedule: "23:00"
+      days: "1-5"
+      depends_on: []
+      # 机制卡 (2026-09-07)③: 600→1800 — VACUUM INTO 15.6G 库实测 13min
+      # (780s), 600s 必被 run_pipeline 掐成假失败; 1800s = 13min + gzip/IO
+      # 余量。超时族语义 = 清 tmp + failed 不降级 (ghost 由判读哨接管)。
+      timeout_s: 1800
+      max_retries: 2
+      description: "数据库备份：qs.db → data/backups/"
+
+    incremental_backup:
+      schedule: "23:05"
+      days: "1-5"
+      # v1.0 判据 6 (备份异地化): db_backup (全备) 之后跑增量 — 按表 dump
+      # 当日行, 周二~周五的日差件 (周六日无新数据不跑, 周一归全备).
+      depends_on: ["db_backup"]
+      timeout_s: 300
+      max_retries: 1
+      description: "增量备份：按表 dump 当日行 → data/backups/incremental/"
+
+    # ─── 每周 ──────────────────────────────────────
+    weekly_summary:
+      schedule: "08:00"
+      days: "6"              # 周六
+      depends_on: []
+      # G8 2026-10-23: 保持 120s —— 实测 P90=1s Max=4s(近12次),
+      #   120s 有 30 倍余量; 与代码默认 180s 不同属有意为之, 非隐患
+      timeout_s: 120
+      max_retries: 2
+      description: "周报：本周绩效 + 最佳/最差 + 退出质量 + 策略调整"
+
+    wfo_gate:
+      schedule: "20:00"
+      days: "0"              # 周日
+      depends_on: []
+      timeout_s: 600
+      max_retries: 2
+      retry_delay_s: 60
+      description: "WFO 门禁验证：Walk-Forward 优化 → OOS Efficiency 门禁"
+
+    param_tuning:
+      schedule: "22:00"
+      days: "0"              # 周日
+      depends_on: ["wfo_gate"]
+      timeout_s: 600
+      max_retries: 2
+      description: "参数调优：基于过去 7 天绩效 + 市场状态调整入场/出场参数"
+
+    # ─── 每月 ──────────────────────────────────────
+    model_retrain:
+      schedule: "22:00"
+      days: "1"              # 每月1日
+      depends_on: []
+      timeout_s: 1800
+      max_retries: 1
+      # (#110 2026-09-04) 数据腿预算真源 — 两腿拆外层静态 30s 超时装饰器后
+      # 预算改参数化, 此处为缺省 DEFAULTS 层真值 (生产可 local.yaml 覆盖):
+      #   compute 腿 = TEMP TABLE LEAD 窗口全表扫 daily_klines (09-02 23:46
+      #     实跑 67s 超原 30s 静态顶, 规模无关病灶) → 600s
+      #   training 腿 = factor_daily 截面 SELECT → 120s
+      data_leg_compute_timeout_s: 600
+      data_leg_training_timeout_s: 120
+      description: "ML 模型重训练：读历史数据 → 训练 .pkl → registry 注册"
+
+    monthly_report:
+      schedule: "22:30"
+      days: "1"              # 每月1日
+      depends_on: ["model_retrain"]
+      timeout_s: 120
+      max_retries: 1
+      description: "月度绩效报告：月度收益/夏普/最大回撤/因子归因"
+
+    # ─── 运维 ──────────────────────────────────────
+    health_check:
+      schedule: "10:00,14:00,16:00"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 30
+      max_retries: 1
+      wait_timeout_s: 7200
+
+      description: "全层健康检查：所有 layer.health() + 报告 + 告警"
+
+    intraday_monitor:
+      schedule: "continuous"
+      days: "1-5"
+      depends_on: []
+      timeout_s: 30
+      max_retries: 1
+      description: "盘中监控循环 (09:30-15:00 每5分钟)，由 systemd 管理"
+
+    log_rotation:
+      schedule: "23:30"
+      days: "*"
+      depends_on: []
+      timeout_s: 60
+      max_retries: 1
+      description: "日志轮转：清理 30 天前的日志文件"
+
+    disk_check:
+      schedule: "hourly"
+      days: "*"
+      depends_on: []
+      timeout_s: 30
+      max_retries: 1
+      description: "磁盘空间检查：每小时按 warning/critical 阈值分级告警"
+
+    provider_check:
+      schedule: "continuous"
+      days: "*"
+      depends_on: []
+      timeout_s: 10
+      max_retries: 1
+      description: "LLM Provider 联通性检查 (每5分钟)，由 Ops 内部定时器管理"
+
+  # P0-7 方向B: cron 看门狗预算 — scripts/cron_watchdog.sh 运行时读本段派生超时
+  # (D-31 单一事实源: crontab 不硬编码数字, ops.yaml 改了包装器自动跟随)
+  # 总预算 = timeout_s + grace_s; 超预算先 SIGTERM, 宽限期后 SIGKILL, 锁随进程死亡释放
+  # P0-3① 心跳模型: 管道超期未成功主动告警 (ops_layer/heartbeat_check.py)
+  # grace_s = 排程时刻+执行预算之后的基础宽限; overrides 按管道覆盖
+  # (长管道/依赖链的实际完成时刻晚于公式估计时上调, 防误报)。
+  heartbeat:
+    grace_s: 1800
+    overrides:
+      daily_data_pipeline: 3600   # ddp 实测 91min, 预算公式外再给 1h 宽限
+      evening_report: 3600        # 依赖链末端, 等待窗+执行叠加
+  cron_watchdog:
+    grace_s: 120
+    overrides:            # 非管道入口 (scripts/* 直驱) 的预算键
+      intraday_scan: 120
+      # daily_update: 已被上方 ops.pipelines.daily_update 段取代 (2026-09-25)。
+      # cron_watchdog.sh 的预算派生是 `if key in pipelines` 二选一, 一旦该 key
+      # 进了 pipelines 段, 本 overrides 值**不再被读** —— 留着会成为漂移源
+      # (后人改它会以为生效)。预算现由 pipelines 段的 timeout_s=300 承载, 仍是 420s。
+      daily_update: 300
+      e2e_verification: 600
+      api_health_check: 60
+
+  # AG-QUOTA-2 件1 (2026-09-11): 配额真源 — 9router usageDaily sqlite mode=ro
+  # 直读 (照 llm.yaml key_source 同款通道先例)。degraded 显式位禁静默。
+  agent:
+    quota:
+      daily_budget_requests: 3000     # Agent key 日预算 (当日真 requests)
+      daily_budget_cost: 5.0          # 日成本预算 ($)
+      low_remaining_pct: 0.30         # 剩余<30% 触发保守降级
+      source_path: ~/.9router/db/data.sqlite
+      api_key_hint: sk-4166fcd0        # byApiKey 前缀匹配 hint (Agent key)
+
+  # Q4: BEGIN IMMEDIATE 锁健康探针 — scripts/lock_probe.py 运行时读本段
+  # (铁律 #9 例外已获批, 三约束: 短 busy_timeout / try-finally rollback / 频率限制,
+  #  另保留 ro 降级路径; 三分支 healthy=0 locked=3 degraded=4)
+  lock_probe:
+    busy_timeout_ms: 2000   # 约束1: 撞锁最多等 2s 即返回 locked, 绝不长阻塞
+    min_interval_s: 60      # 约束3: 频率限制, 距上次探针不足 60s 跳过 (--force 绕过)
+
+  # W2 卡⑤ (2026-09-20): GFS 分级备份保留 — 恢复深度 7 天 → 7日+4周+6月。
+  # 磁盘数学 (2026-09-20 实测): 3.7GB/份, 单档 7 份 = 25.9GB 恒定; GFS 稳态
+  # ≈17 份 ≈63GB (同份多档重叠不重复占空间), free 102G 内承受。
+  # gz 增速实测 +0.0078GB/日 (3.5G 是单份大小非日增量, 勘误)。
+  backup:
+    keep_daily: 7
+    keep_weekly: 4
+    keep_monthly: 6
+
+  # F2.5: 交易日 kline 分表覆盖率下限 (低于此值判该日 failed, 防假成功)
+  min_kline_rows: 4000
+  # db_backup/disk_check 卡 (2026-09-05): disk_check 双判据阈值 — Config
+  # 全键空间属主 (#108 _cfg_all 先例, 禁 pipeline-block-scope 读法)。
+  #   disk_warning_pct / disk_alert_pct: df 口径 (used/(used+avail), f_bavail 基排除 root
+  #     保留块) 百分比阈值 — 旧 shutil 口径恒偏 4.52pt 物理上限 95%,
+  #     `>90` 实际触发线 df ~94.5% 缓冲仅 ~1.2G, 09-03/04 全天盲区零告警实证。
+  #   disk_alert_floor_gb: 绝对余量地板 (GB, 三口径并存时唯一无歧义锚)
+  disk_warning_pct: 85
+  disk_alert_pct: 92
+  disk_alert_floor_gb: 20
+
+  # 机制卡 (2026-09-07)①: db_backup 引擎键 — vacuum_into (案2, 默认: ro
+  #   一致性快照直写 tmp, 无裸 .db 与 .gz 并存 = 病A 消灭; 中断 tmp 由
+  #   下次运行开头自愈清扫) | staging (案1, 显式回退: SQLite backup API)。
+  #   引擎病 (VACUUM OperationalError) 自动降级 staging + run 行 partial
+  #   语义; 盘满/超时族不降级只 failed (案1 峰值 19.1G > 案2 17.7G,
+  #   降级空跑再炸)。单次闸 = df 余量 > 源库×1.2 (运行时 getsize 自适应,
+  #   代码面非本键), 与上方 floor_gb 地板键并行取严。
+  db_backup_engine: vacuum_into
+# ── F1 purgedcv 升级哨兵 (D-291 期1配套, 统筹 sm-58814c13363f4078) ──
+# 顶层段全键空域 (禁 pipeline-block-scope 读法 — D-293 证伪陷阱面)。
+# state: lightweight(默认,缺键同义) | strict(升级后) | keep_light(用户明裁);
+# oos_trade_threshold: T1 阈值 (walk_forward 折叠 OOS 累计口径, 宁可少算不虚涨);
+# stable_window_end: F2 稳定窗窗末日, 锚=回补批完成日 08-26 (jsonl run_finished
+#   08-26 00:31:17 物证; 改基裁定 sm-5ab96e9e15aa4123 — 旧锚 08-29 系 GO-9
+#   卷宗窗口包日期误标为批完成日, 勘正记档) → 锚日 08-26 + 14 天 = 2026-09-09
+#   值由统筹 22:05 窗亲落 (本施工只做读侧, 不写值); 值即唯一事实源, 哨兵 T2 跟随键值。
+purged_cv_upgrade:
+  state: lightweight
+  oos_trade_threshold: 50
+  stable_window_end: "2026-09-09"

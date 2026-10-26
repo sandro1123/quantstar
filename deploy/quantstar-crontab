@@ -1,0 +1,117 @@
+# deploy/quantstar-crontab — 线上 crontab -l 的快照 (2026-08-23 落库, GO-7 后)
+# 权威源是运行时 (crontab -l), 不是本文件。本文件仅供重建: crontab deploy/quantstar-crontab
+# 历史草稿见 quantstar-crontab.apply.pre-go7 / .proposed.pre-go7 (GO-7 前, 已作废)
+# 注: 以下快照体第 1-2 行为线上遗留的过时注释（自称未应用/31 行），实际已应用/36 行 17 带闸，见 OP-07
+# P0-7 方向B 待应用 crontab (生成于 qs-p0, 未写入; 需用户 GO 后 crontab - 应用)
+# 包装 31 行; 未包装非 qs 行: 0
+# QuantStar start
+# QuantStar 定时任务
+# 所有任务通过 `python -m src pipeline run <name>` 触发
+# 管道定义在 config/defaults/ops.yaml 中（含依赖/超时/重试）
+
+# ─── 盘前 ──────────────────────────────────────
+# 08:00 早报 (统一管线)
+0 8 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh morning_brief /home/app/quantstar/.venv/bin/python -m src pipeline run morning_brief >> /home/app/quantstar/logs/pipeline.log 2>&1
+5 8 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh build_morning_brief /home/app/quantstar/.venv/bin/python scripts/build_morning_brief.py --dry-run >> /home/app/quantstar/logs/morning_brief_debug.log 2>&1
+
+# 09:00 盘前数据刷新
+0 9 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh pre_market_refresh /home/app/quantstar/.venv/bin/python -m src pipeline run pre_market_refresh >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 09:25 集合竞价解析
+25 9 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh auction_parse /home/app/quantstar/.venv/bin/python -m src pipeline run auction_parse >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 09:35 开盘速报
+35 9 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh morning_review /home/app/quantstar/.venv/bin/python -m src pipeline run morning_review >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# ─── 盘中 ───
+# 每5分钟盘中扫描 (09:30-15:00)
+30-59/5 9 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh intraday_scan scripts/cron_watchdog.sh intraday_scan /home/app/quantstar/.venv/bin/python -m src.execution_layer.scripts.intraday_scan >> /home/app/quantstar/logs/intraday.log 2>&1
+*/5 10-14 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh intraday_scan scripts/cron_watchdog.sh intraday_scan /home/app/quantstar/.venv/bin/python -m src.execution_layer.scripts.intraday_scan >> /home/app/quantstar/logs/intraday.log 2>&1
+0 15 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh intraday_scan scripts/cron_watchdog.sh intraday_scan /home/app/quantstar/.venv/bin/python -m src.execution_layer.scripts.intraday_scan >> /home/app/quantstar/logs/intraday.log 2>&1
+
+# 15:30 盘后更新
+16 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh daily_update scripts/cron_watchdog.sh daily_update /home/app/quantstar/.venv/bin/python -m src.execution_layer.scripts.daily_update >> /home/app/quantstar/logs/daily_update.log 2>&1
+
+# 12:00 午间速报 (统一管线)
+0 12 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh midday_brief /home/app/quantstar/.venv/bin/python -m src pipeline run midday_brief >> /home/app/quantstar/logs/pipeline.log 2>&1
+5 12 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh build_midday_brief /home/app/quantstar/.venv/bin/python scripts/build_midday_brief.py --dry-run >> /home/app/quantstar/logs/midday_brief_debug.log 2>&1
+
+# ─── 盘后 ──────────────────────────────────────
+# 15:05 收盘处理
+5 15 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh end_of_day scripts/cron_watchdog.sh end_of_day /home/app/quantstar/.venv/bin/python -m src pipeline run end_of_day >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 15:30 数据采集
+30 15 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh daily_data_pipeline scripts/cron_watchdog.sh daily_data_pipeline /home/app/quantstar/.venv/bin/python -m src pipeline run daily_data_pipeline >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 16:00 因子计算
+0 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh factor_update scripts/cron_watchdog.sh factor_update /home/app/quantstar/.venv/bin/python -m src pipeline run factor_update >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 16:10 前向收益回填 (DL-34, depends_on factor_update)
+10 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh fwd_return_backfill scripts/cron_watchdog.sh fwd_return_backfill /home/app/quantstar/.venv/bin/python -m src pipeline run fwd_return_backfill >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 16:15 IC 反馈调权
+15 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh ic_feedback scripts/cron_watchdog.sh ic_feedback /home/app/quantstar/.venv/bin/python -m src pipeline run ic_feedback >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 16:20 数据质量门禁 (DL-33, depends_on daily_data_pipeline)
+20 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh quality_check scripts/cron_watchdog.sh quality_check /home/app/quantstar/.venv/bin/python -m src pipeline run quality_check >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 16:22 数据新鲜度审计 (DL-33, depends_on daily_data_pipeline)
+22 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh freshness_audit scripts/cron_watchdog.sh freshness_audit /home/app/quantstar/.venv/bin/python -m src pipeline run freshness_audit >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 16:30 每日回测
+30 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh daily_backtest scripts/cron_watchdog.sh daily_backtest /home/app/quantstar/.venv/bin/python -m src pipeline run daily_backtest >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 16:45 晚报 (pipeline)
+45 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh evening_report scripts/cron_watchdog.sh evening_report /home/app/quantstar/.venv/bin/python -m src pipeline run evening_report >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 17:15 Dev 验证报告
+15 17 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh dev_verify_report scripts/cron_watchdog.sh dev_verify_report /home/app/quantstar/.venv/bin/python -m src pipeline run dev_verify_report >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 17:30 运维日报
+30 17 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh daily_ops_report scripts/cron_watchdog.sh daily_ops_report /home/app/quantstar/.venv/bin/python -m src pipeline run daily_ops_report >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+
+
+# ─── Sprint 3 端到端验证 ──────────────────────
+# 09:45 盘前链路验证（晨报/盘前/竞价/速报）
+45 9 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh e2e_verification /home/app/quantstar/.venv/bin/python scripts/e2e_verification.py --phase pre >> /home/app/quantstar/logs/e2e_verification.log 2>&1
+
+# 18:00 盘后全链路验证 + 数据新鲜度
+0 18 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh e2e_verification /home/app/quantstar/.venv/bin/python scripts/e2e_verification.py --phase full >> /home/app/quantstar/logs/e2e_verification.log 2>&1
+
+# 23:00 数据库备份
+0 23 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh db_backup /home/app/quantstar/.venv/bin/python -m src pipeline run db_backup >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# ─── 运维 ──────────────────────────────────────
+# 10:00 / 14:00 / 16:00 健康检查
+0 10,14 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh health_check scripts/cron_watchdog.sh health_check /home/app/quantstar/.venv/bin/python -m src pipeline run health_check >> /home/app/quantstar/logs/health.log 2>&1
+50 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh health_check scripts/cron_watchdog.sh health_check /home/app/quantstar/.venv/bin/python -m src pipeline run health_check >> /home/app/quantstar/logs/health.log 2>&1
+
+# 23:30 日志轮转
+30 23 * * * cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh log_rotation /home/app/quantstar/.venv/bin/python -m src pipeline run log_rotation >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 08:00 / 14:00 磁盘检查
+0 8,14 * * * cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh disk_check /home/app/quantstar/.venv/bin/python -m src pipeline run disk_check >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# ─── 每周 ──────────────────────────────────────
+# 周六 08:00 周报
+0 8 * * 6 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh weekly_summary /home/app/quantstar/.venv/bin/python -m src pipeline run weekly_summary >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 周日 20:00 WFO 门禁
+0 20 * * 0 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh wfo_gate /home/app/quantstar/.venv/bin/python -m src pipeline run wfo_gate >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 周日 22:00 参数调优
+0 22 * * 0 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh param_tuning /home/app/quantstar/.venv/bin/python -m src pipeline run param_tuning >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# ─── 每月 ──────────────────────────────────────
+# 每月1日 22:00 模型重训练
+0 22 1 * * cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh model_retrain /home/app/quantstar/.venv/bin/python -m src pipeline run model_retrain >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# 每月1日 22:30 月度报告
+30 22 1 * * cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh monthly_report /home/app/quantstar/.venv/bin/python -m src pipeline run monthly_report >> /home/app/quantstar/logs/pipeline.log 2>&1
+
+# QuantStar API 健康检查 (每5分钟, 连续3次失败告警)
+*/5 * * * * cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/cron_watchdog.sh api_health_check /home/app/quantstar/.venv/bin/python -u scripts/api_health_check.py >> /home/app/quantstar/logs/api_health_check.log 2>&1
+# QuantStar end
+# Antigravity token watchdog
+*/5 * * * * /usr/bin/python3 /home/app/.9router/token_watchdog.py

@@ -1,0 +1,42 @@
+[Unit]
+Description=QS HITL WebSocket daemon (Feishu approval card callback)
+Documentation=file:///home/app/quantstar/src/delivery_layer/hitl_ws_daemon.py
+# 刻意不写 After/Wants=network-online.target: 那是 system target, 在 user
+# manager 里不存在, 写上等于空条件 (统筹裁定)。启动早于网络就绪的场景由
+# Restart=always + RestartSec=5s 兜; 不设 StartLimit*, 用 systemd 默认
+# (10s 窗口 5 次) —— RestartSec=5s 下每 10s 只起 ~2 次, 触不到上限,
+# 因此瞬时网络故障能一直重试; 硬性配置错误 (如缺凭据) 每次退出都会往
+# logs/hitl_ws_heartbeat.jsonl 写一行 fatal, 可观测不静默 (铁律#12)。
+
+[Service]
+Type=simple
+WorkingDirectory=/home/app/quantstar
+ExecStart=/home/app/quantstar/.venv/bin/python /home/app/quantstar/src/delivery_layer/hitl_ws_daemon.py
+Restart=always
+RestartSec=5s
+# MemoryMax 实测定值: 光 import lark_oapi 就占 ~160MB (其 __init__.py 做
+# `from .api import *`, 把整个生成的 API 面全拖进来; 换窄 import 也躲不掉,
+# 实测 from lark_oapi.ws import Client = 170MB)。daemon 稳态 ~175MB,
+# 原 128M 会在 import 阶段就被 OOM-kill (08-26 实战: 32 次重启循环)。
+# 384M ≈ 2.2x 稳态, 既留足回调/ws 缓冲余量, 又仍能兜住内存泄漏。
+MemoryMax=384M
+NoNewPrivileges=true
+PrivateTmp=true
+Environment=PYTHONPATH=/home/app/quantstar/src
+Environment=CONFIG_ENV=prod
+# 不用 EnvironmentFile 读 .env: .env 里的值带引号, systemd 与 python-dotenv
+# 的引号/转义语义不一致, 双份解析容易出歧义。daemon 自带 load_dotenv (CF-01)。
+
+[Install]
+WantedBy=default.target
+
+# ---------------------------------------------------------------------------
+# Phase 2 预留 (兜底轮询脚本走 cron 调 systemctl --user 时必须显式设置,
+# 否则 cron 环境下没有 DBUS/XDG 变量, systemctl --user 会直接失败):
+#
+#   export XDG_RUNTIME_DIR=/run/user/$(id -u)
+#   export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
+#   /usr/bin/systemctl --user is-active qs-hitl-ws
+#
+# Linger 已确认 =yes (loginctl show-user quantstar), 无需再开。
+# ---------------------------------------------------------------------------

@@ -1,0 +1,16 @@
+strategy:
+  factors:
+    enabled: []
+    top_n: 10
+  selection:
+    l1_filters:
+# ST-REGIME 情绪周期判定参数 (sm-2dc7744a35d6494a 第二段; 代码常量为缺省回落,
+# 本键为运行时权威 — 攒 40 交易日分布账后呈用户裁)
+  regime:
+    emotion_cycle:
+      ladder_ice_floor: 200
+      zt_ice_ceiling: 30
+      dt_ebb_floor: 30
+      zt_climax_floor: 90
+      slope_window: 3
+      ferment_slope_min: 15

@@ -1,0 +1,190 @@
+{
+  "type": "object",
+  "properties": {
+    "ops": {
+      "type": "object",
+      "properties": {
+        "pipelines": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "heartbeat": {
+          "type": "object",
+          "properties": {
+            "grace_s": {
+              "type": "integer"
+            },
+            "overrides": {
+              "type": "object",
+              "properties": {
+                "daily_data_pipeline": {
+                  "type": "integer"
+                },
+                "evening_report": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "daily_data_pipeline",
+                "evening_report"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "grace_s",
+            "overrides"
+          ],
+          "additionalProperties": true
+        },
+        "cron_watchdog": {
+          "type": "object",
+          "properties": {
+            "grace_s": {
+              "type": "integer"
+            },
+            "overrides": {
+              "type": "object",
+              "properties": {
+                "intraday_scan": {
+                  "type": "integer"
+                },
+                "daily_update": {
+                  "type": "integer"
+                },
+                "e2e_verification": {
+                  "type": "integer"
+                },
+                "api_health_check": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "api_health_check",
+                "daily_update",
+                "e2e_verification",
+                "intraday_scan"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "grace_s",
+            "overrides"
+          ],
+          "additionalProperties": true
+        },
+        "agent": {
+          "type": "object",
+          "properties": {
+            "quota": {
+              "type": "object",
+              "properties": {
+                "daily_budget_requests": {
+                  "type": "integer"
+                },
+                "daily_budget_cost": {
+                  "type": "number"
+                },
+                "low_remaining_pct": {
+                  "type": "number"
+                },
+                "source_path": {
+                  "type": "string"
+                },
+                "api_key_hint": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "api_key_hint",
+                "daily_budget_cost",
+                "daily_budget_requests",
+                "low_remaining_pct",
+                "source_path"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "quota"
+          ],
+          "additionalProperties": true
+        },
+        "lock_probe": {
+          "type": "object",
+          "properties": {
+            "busy_timeout_ms": {
+              "type": "integer"
+            },
+            "min_interval_s": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "busy_timeout_ms",
+            "min_interval_s"
+          ],
+          "additionalProperties": true
+        },
+        "min_kline_rows": {
+          "type": "integer"
+        },
+        "disk_alert_pct": {
+          "type": "integer"
+        },
+        "disk_warning_pct": {
+          "type": "integer"
+        },
+        "disk_alert_floor_gb": {
+          "type": "integer"
+        },
+        "db_backup_engine": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent",
+        "cron_watchdog",
+        "db_backup_engine",
+        "disk_alert_floor_gb",
+        "disk_alert_pct",
+        "disk_warning_pct",
+        "heartbeat",
+        "lock_probe",
+        "min_kline_rows",
+        "pipelines"
+      ],
+      "additionalProperties": true
+    },
+    "purged_cv_upgrade": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string"
+        },
+        "oos_trade_threshold": {
+          "type": "integer"
+        },
+        "stable_window_end": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "oos_trade_threshold",
+        "stable_window_end",
+        "state"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "ops",
+    "purged_cv_upgrade"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from ops.yaml by gen_config_schemas.py"
+}

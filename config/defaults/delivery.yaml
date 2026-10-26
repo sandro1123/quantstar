@@ -1,0 +1,61 @@
+delivery:
+  report_mode: "debug"
+  feishu:
+  retry:
+    max_retries: 3
+  # ── 投递层 v2 (第四波 2026-09-11): 三端语义 + 白名单闸 (宪法 #12) ──
+  # 病理单 (09-10 三问总查): 16 条 intraday_alert 双发 / 三端无语义分工 /
+  # push_rules.yaml 双轨后门 — 本重写逐条销案。
+  #
+  # 三端语义分工:
+  #   feishu_group  = 技术报告主通道 (面向群/技术受众)
+  #   feishu_dm     = 用户个人直达 (盘中警示/关键告警给用户本人)
+  #   ops_archive   = 运维归档通道 (运维件落 outbox/归档, 不直灌用户端)
+  # 仪表盘类 (feishu_bitable) 走 dashboard_bitable_sync 独立管道非推送路由。
+  channel_semantics:
+    feishu_group: "技术报告主通道"
+    feishu_dm: "用户个人直达"
+    ops_archive: "运维归档通道 (归档+日报聚合, 不直灌用户)"
+  # 白名单闸: 未注册 content_type 在 production 默认拒 (默认 dm 兜底废除)。
+  # debug 模式保留 dm 兜底 (开发可见性)。
+  default_deny: true
+  # fan_out 广播语义保留 (收口的是通道清单非广播机制);
+  # 缺省回 executor 内置默认 — 收口前是代码硬编码
+  fan_out_types: [intraday_alert, alert_critical]
+  push_rules:
+    morning_brief:
+      production: [feishu_group]
+      debug: [feishu_dm]
+    # 三端实测差集④ (09-12): 六类技术报告收口齐 — morning_review 漏收口补上
+    morning_review:
+      production: [feishu_group]
+      debug: [feishu_dm]
+    midday_brief:
+      production: [feishu_group]
+      debug: [feishu_dm]
+    premarket_brief:
+      production: [feishu_group]
+      debug: [feishu_dm]
+    evening_report:
+      production: [feishu_group]
+      debug: [feishu_dm]
+    weekly_summary:
+      production: [feishu_group]
+      debug: [feishu_dm]
+    # 病理单销案: 盘中警示从双发收口 DM 单通道 — 用户个人面 (09-08 实测
+    # 16 条双发噪音; 群端无盘中决策受众)
+    intraday_alert:
+      production: [feishu_dm]
+      debug: [feishu_dm]
+    alert_critical:
+      production: [feishu_dm]
+      debug: [feishu_dm]
+    # 宪法 #12 施工面: 运维件与用户直推分离 — 归档+日报聚合
+    # (ops_report 17:30 聚合当日运维面后归档; dev_verify 同归档面;
+    #  想看运维=读归档/晨报水位段, 不再 DM 直灌)
+    ops_report:
+      production: [ops_archive]
+      debug: [feishu_dm]
+    dev_verify:
+      production: [ops_archive]
+      debug: [feishu_dm]

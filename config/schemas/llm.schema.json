@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "properties": {
+    "llm": {
+      "type": "object",
+      "properties": {
+        "enable_discovery": {
+          "type": "boolean"
+        },
+        "rotation": {
+          "type": "string"
+        },
+        "providers": {
+          "type": "array"
+        },
+        "cache": {
+          "type": "object",
+          "properties": {
+            "max_size": {
+              "type": "integer"
+            },
+            "default_ttl": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "default_ttl",
+            "max_size"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "cache",
+        "enable_discovery",
+        "providers",
+        "rotation"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "llm"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from llm.yaml by gen_config_schemas.py"
+}

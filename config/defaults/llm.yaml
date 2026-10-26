@@ -1,0 +1,97 @@
+llm:
+  # ── 2026-10-21 (用户令): 9router 作废, 全切 10router 网关 (端口 20129) ──
+  # 主链 = codebuddy-cn 的 hy3 (用户指定, 实测完全免费)。
+  #
+  # 本文件每一条腿都是 2026-10-21 统筹逐条实测得出, 不是照抄模型列表
+  # (实测教训: 模型出现在 /v1/models 列表里 != 真能用):
+  #   可用: cbcn/hy3, cbai/hy3, openrouter/nvidia/nemotron-3-ultra:free,
+  #         cbcn/glm-5.2, cbcn/deepseek-v4-pro, deepseek-flash
+  #   不可用(已剔除): b/hy3 (No active credentials),
+  #                   openrouter/tencent/hy3:free (404),
+  #                   openrouter/nvidia/nemotron-3-super:free (错误),
+  #                   cbai/deepseek-v4-pro (400 code 11102),
+  #                   nvidia/llama-3.1-{8b,70b} + nvidia/llama-3.3-nemotron-super
+  #                   + deepseek-ai/deepseek-v4-pro  (HTTP 410 官方 EOL, 8月已下线)
+  #
+  # 关键修正 (统筹 2026-10-21 实测):
+  #   ① 网关端口: 9router(20128) 已停服 -> 10router(20129), unit=10router-gateway
+  #   ② *** 'Agent' 这把 key 已失效 (实测 Invalid API key), 改用 'Hermes-Agent' ***
+  #   ③ hy3 是 reasoning 模型: reasoning 吃大头 token, max_tokens 给小(<=150)
+  #      会 HTTP 200 但 content 空 假成功 -> 本文件统一 >=600
+  # rotation=strict_priority: 按 priority 严格走链不轮换
+  enable_discovery: false
+  rotation: strict_priority
+  providers:
+    # ── 主链: codebuddy-cn hy3 (用户指定, 免费, 实测 1.1s) ──
+    - name: r10-hy3-primary
+      url: http://localhost:20129/v1/chat/completions
+      key_source:
+        type: sqlite
+        path: ~/.10router/db/data.sqlite
+        query: SELECT key FROM apiKeys WHERE name='Hermes-Agent' AND isActive=1 ORDER BY id LIMIT 1
+      model: cbcn/hy3
+      rate_limit: 20
+      timeout: 60
+      # G9: 推理模型思考会吃掉大部分 token, 给调用方一个预算下限
+      reasoning_floor: 6000
+      priority: 1
+    # ── 备链1: codebuddy-ai hy3 (同族另一 key 池, 实测 1.9s) ──
+    - name: r10-hy3-backup
+      url: http://localhost:20129/v1/chat/completions
+      key_source:
+        type: sqlite
+        path: ~/.10router/db/data.sqlite
+        query: SELECT key FROM apiKeys WHERE name='Hermes-Agent' AND isActive=1 ORDER BY id LIMIT 1
+      model: cbai/hy3
+      rate_limit: 10
+      timeout: 60
+      # G9: 推理模型思考会吃掉大部分 token, 给调用方一个预算下限
+      reasoning_floor: 8000
+      priority: 2
+    # ── 备链2: nemotron-3-ultra 免费档 (实测 0.9s) ──
+    - name: r10-nemotron
+      url: http://localhost:20129/v1/chat/completions
+      key_source:
+        type: sqlite
+        path: ~/.10router/db/data.sqlite
+        query: SELECT key FROM apiKeys WHERE name='Hermes-Agent' AND isActive=1 ORDER BY id LIMIT 1
+      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+      rate_limit: 5
+      timeout: 60
+      priority: 3
+    # ── 备链3: cbcn/glm-5.2 (实测 1.1s) ──
+    - name: r10-glm52
+      url: http://localhost:20129/v1/chat/completions
+      key_source:
+        type: sqlite
+        path: ~/.10router/db/data.sqlite
+        query: SELECT key FROM apiKeys WHERE name='Hermes-Agent' AND isActive=1 ORDER BY id LIMIT 1
+      model: cbcn/glm-5.2
+      rate_limit: 10
+      timeout: 45
+      priority: 4
+    # ── 备链4: cbcn/deepseek-v4-pro (实测 1.2s) ──
+    - name: r10-dsv4pro
+      url: http://localhost:20129/v1/chat/completions
+      key_source:
+        type: sqlite
+        path: ~/.10router/db/data.sqlite
+        query: SELECT key FROM apiKeys WHERE name='Hermes-Agent' AND isActive=1 ORDER BY id LIMIT 1
+      model: cbcn/deepseek-v4-pro
+      rate_limit: 10
+      timeout: 45
+      priority: 5
+    # ── 备链5: gateway 自带 deepseek-flash (实测 1.3s) ──
+    - name: r10-ds-flash
+      url: http://localhost:20129/v1/chat/completions
+      key_source:
+        type: sqlite
+        path: ~/.10router/db/data.sqlite
+        query: SELECT key FROM apiKeys WHERE name='Hermes-Agent' AND isActive=1 ORDER BY id LIMIT 1
+      model: deepseek-flash
+      rate_limit: 5
+      timeout: 45
+      priority: 6
+  cache:
+    max_size: 500
+    default_ttl: 3600

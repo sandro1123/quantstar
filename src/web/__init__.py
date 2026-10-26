@@ -1,0 +1,1 @@
+"""QuantStar Web API"""

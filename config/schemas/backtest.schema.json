@@ -1,0 +1,88 @@
+{
+  "type": "object",
+  "properties": {
+    "backtest": {
+      "type": "object",
+      "properties": {
+        "hold_days": {
+          "type": "integer"
+        },
+        "persistence": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "additionalProperties": true
+        },
+        "paper_trading": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "additionalProperties": true
+        },
+        "costs": {
+          "type": "object",
+          "properties": {
+            "commission_rate": {
+              "type": "number"
+            },
+            "slippage_rate": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "commission_rate",
+            "slippage_rate"
+          ],
+          "additionalProperties": true
+        },
+        "metrics": {
+          "type": "object",
+          "properties": {
+            "benchmark": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "benchmark"
+          ],
+          "additionalProperties": true
+        },
+        "walk_forward": {
+          "type": [
+            "null",
+            "string",
+            "number",
+            "boolean"
+          ]
+        }
+      },
+      "required": [
+        "costs",
+        "hold_days",
+        "metrics",
+        "paper_trading",
+        "persistence",
+        "walk_forward"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "backtest"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from backtest.yaml by gen_config_schemas.py"
+}

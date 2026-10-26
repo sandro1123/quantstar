@@ -1,0 +1,14 @@
+execution:
+  initial_capital: 300000.0  # 全系统唯一资金基准（纸面/实盘账本，D-24/D-26）
+  dry_run: true
+  stop_loss_pct: 0.08
+  max_holding_days: 30
+  max_positions: 10
+  max_single_stock_pct: 20.0
+  watch_expire_days: 7
+  hitl_auto_approve: false  # Phase 1.6: 模拟盘信号自动批准 (人工审批退役); 回滚=翻回 false
+  track_exit_source: false
+  # REC 模块2 (2026-10-24 批准): 风险收益比入池下限。实测优质标的密集分布在 1.478~1.498, 1.5 门槛过严致候选池断崖, 调为 1.45
+  min_rr_ratio: 1.45
+  intraday_monitor:
+    enabled: false

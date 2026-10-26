@@ -1,0 +1,27 @@
+[Unit]
+Description=QuantStar A股量化选股系统
+After=network.target
+
+[Service]
+Type=simple
+User=quantstar
+WorkingDirectory=/home/app/quantstar
+ExecStart=/home/app/quantstar/.venv/bin/python -m src run --mode full
+Restart=on-failure
+RestartSec=30
+Environment=PYTHONPATH=/home/app/quantstar/src
+Environment=CONFIG_ENV=prod
+# 加固: 运行用户须预先创建 (sudo useradd --system --create-home --home-dir /home/app quantstar)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/app/quantstar/data /home/app/quantstar/logs
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

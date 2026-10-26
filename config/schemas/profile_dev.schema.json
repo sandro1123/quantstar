@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "report_mode": {
+      "type": "string"
+    },
+    "trading_schedule": {
+      "type": "string"
+    },
+    "silent_mode": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "report_mode",
+    "silent_mode",
+    "trading_schedule"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from dev.yaml by gen_config_schemas.py"
+}

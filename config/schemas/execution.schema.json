@@ -1,0 +1,72 @@
+{
+  "type": "object",
+  "properties": {
+    "execution": {
+      "type": "object",
+      "properties": {
+        "initial_capital": {
+          "type": "number"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "stop_loss_pct": {
+          "type": "number"
+        },
+        "max_holding_days": {
+          "type": "integer"
+        },
+        "max_positions": {
+          "type": "integer"
+        },
+        "max_single_stock_pct": {
+          "type": "number"
+        },
+        "watch_expire_days": {
+          "type": "integer"
+        },
+        "hitl_auto_approve": {
+          "type": "boolean"
+        },
+        "track_exit_source": {
+          "type": "boolean"
+        },
+        "min_rr_ratio": {
+          "type": "number"
+        },
+        "intraday_monitor": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "dry_run",
+        "hitl_auto_approve",
+        "initial_capital",
+        "intraday_monitor",
+        "max_holding_days",
+        "max_positions",
+        "max_single_stock_pct",
+        "min_rr_ratio",
+        "stop_loss_pct",
+        "track_exit_source",
+        "watch_expire_days"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "execution"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from execution.yaml by gen_config_schemas.py"
+}

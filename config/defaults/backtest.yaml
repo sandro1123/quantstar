@@ -1,0 +1,12 @@
+backtest:
+  hold_days: 5
+  persistence:
+    enabled: true  # BT-03 backtest_runs 落库门控 (回测战役裁定): 开启后 daily_backtest/walk_forward 结果落 backtest_runs 表
+  paper_trading:
+    enabled: false  # BT-12 观察期总闸 (D-280 分叉①): true 后纸交易才写 paper_trading_stats
+  costs:
+    commission_rate: 0.00025
+    slippage_rate: 0.001
+  metrics:
+    benchmark: equal_weight
+  walk_forward:

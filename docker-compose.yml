@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  quantstar:
+    build: .
+    container_name: quantstar
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    environment:
+      - PYTHONPATH=/app/src
+      - CONFIG_ENV=prod
+      # 容器内请求不会来自 127.0.0.1, 必须设置 token 才能访问 API
+      - QS_API_TOKEN=${QS_API_TOKEN:?set QS_API_TOKEN in .env}
+    ports:
+      # 只绑本机; 对外暴露请走反向代理并设置 QS_API_TOKEN
+      - "127.0.0.1:8000:8000"
+    # F6.4: 容器入口对齐生产 API (quantstar-api.service 同款 gunicorn)。
+    # 完整容器化 (cron/管道/卷/密钥) 推迟到 v0.20, 本 sprint 只修 CMD/healthcheck。
+    command: ["gunicorn", "-w", "2", "-b", "0.0.0.0:8000", "web.api:app"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import os,urllib.request,sys; r=urllib.request.Request('http://127.0.0.1:8000/health', headers={'Authorization': 'Bearer ' + os.environ['QS_API_TOKEN']}); sys.exit(0 if urllib.request.urlopen(r, timeout=5).status==200 else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

@@ -1,0 +1,3 @@
+report_mode: debug
+trading_schedule: relaxed
+silent_mode: true

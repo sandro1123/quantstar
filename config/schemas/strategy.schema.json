@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "strategy": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "strategy"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from strategy.yaml by gen_config_schemas.py"
+}

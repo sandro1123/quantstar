@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "report": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "report"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from report.yaml by gen_config_schemas.py"
+}

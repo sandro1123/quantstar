@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantstar"
+version = "0.20.0-beta.1"
+description = "QuantStar — A股量化选股系统"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "QuantStar Team"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "requests>=2.31",
+    "pyyaml>=6.0",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "python-dotenv>=1.0",
+    "click>=8.1",
+    "pydantic>=2.6,<3",
+    "scipy>=1.11",
+    "scikit-learn>=1.3",
+    "akshare>=1.14",
+    "tushare>=1.4.29",
+    "mootdx>=0.11.7",
+    "flask>=3.0",
+    "gunicorn>=22.0",
+    "apprise>=1.13",
+    "lark-oapi>=1.7",      # HITL 飞书卡片 daemon (与 requirements.txt 同步, 2026-09-18 对账补齐)
+    "instructor>=1.15",   # LLM 结构化输出 (与 requirements.txt 同步)
+    "baostock>=0.9",      # K线数据源 (data layer registry)
+    "easyquotation>=0.7.7",# 行情实时数据源
+    "deepdiff>=9.0",      # 配置漂移哨兵 (scripts/config_drift_sentinel)
+    "jsonschema>=4.21",   # schema 校验 (config layer)
+    "yamllint>=1.35",     # yaml lint (ops config checks)
+]
+
+[project.scripts]
+quantstar = "cli.main:cli"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "black>=24.0",
+    "ruff>=0.3",
+    "mypy>=1.8",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+# 本仓 2026-09 首次接入 CI 全量 lint。既有代码风格为刻意选择：
+# - E402: 数据层/执行层脚本须先 load_dotenv 再 import (铁律#11, cron 直驱链)
+# - E701/E731/E741: 紧凑写法是既有惯例
+# 逻辑类规则 (F 系列) 保持启用; 风格类仅豁免上述三族, 新代码仍受约束。
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E402", "E701", "E731", "E741", "E501", "W293"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["src", "."]
+addopts = "-v"

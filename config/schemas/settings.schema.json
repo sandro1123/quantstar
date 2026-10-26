@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "properties": {
+    "strategy": {
+      "type": "object",
+      "properties": {
+        "agent_gate": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "agent_gate"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "strategy"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from settings.yaml by gen_config_schemas.py"
+}

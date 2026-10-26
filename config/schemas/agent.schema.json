@@ -1,0 +1,60 @@
+{
+  "type": "object",
+  "properties": {
+    "agent": {
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "object"
+        },
+        "quality_tracking": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "window_days": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "enabled",
+            "window_days"
+          ],
+          "additionalProperties": true
+        },
+        "cache_ttl_seconds": {
+          "type": "integer"
+        },
+        "max_workers": {
+          "type": "integer"
+        },
+        "analyze_timeout_s": {
+          "type": "integer"
+        },
+        "batch_timeout_s": {
+          "type": "integer"
+        },
+        "debate_rounds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "analyze_timeout_s",
+        "batch_timeout_s",
+        "cache_ttl_seconds",
+        "debate_rounds",
+        "max_workers",
+        "providers",
+        "quality_tracking"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "agent"
+  ],
+  "additionalProperties": true,
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "auto-generated from agent.yaml by gen_config_schemas.py"
+}
