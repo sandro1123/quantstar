@@ -442,6 +442,46 @@ class DataLoader:
 
         return (future["close"] - current["close"]) / current["close"] * 100
 
+    def realized_return(self, code: str, date: str, horizon: int = 5) -> float | None:
+        """截至 date **已实现**的 horizon 个交易日收益 (单位: 百分点)。
+
+        与 forward_return 严格互为反面:
+          forward_return  = T → T+N  (未来, 只许进滞后日 IC, 绝不进选股排序)
+          realized_return = T-N → T  (已兑现, 选股 L3.3 唯一可用口径)
+
+        病 (2026-10-26 审计 S-1): 旧实现把 forward_return 写进 recent_return,
+        选股 L3.3 拿它乘评分 = 历史回放里用未来收益排序。PR#4 把值挪走之后
+        recent_return 恒 None, L3.3 又变成死代码 —— 两个错互为镜像。
+
+        边界 (三态, 不编造):
+          - date 当日无 K 线 (未开盘/停牌)  → None  (不是 0)
+          - 前 horizon+1 根不足 (次新股)     → None
+          - 任一端 close <= 0 (停牌脏行)     → None  (F-23 同族: 0 价不得进收益计算)
+        """
+        if horizon <= 0:
+            return None
+        conn = self.db.get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT date, close FROM daily_klines WHERE code = ? AND date <= ? "
+                "ORDER BY date DESC LIMIT ?",
+                (code, date, horizon + 1),
+            ).fetchall()
+        except Exception:
+            return None
+        if len(rows) < horizon + 1:
+            return None
+        newest, oldest = rows[0], rows[-1]
+        # 当日必须真有 K 线: 未开盘时 rows[0] 是上一个交易日, 用它算等于把历史收益
+        # 冒充当日收益 (判例: 判据执行时点 != 数据到达时点)
+        if str(newest["date"])[:10] != str(date)[:10]:
+            return None
+        base = oldest["close"]
+        last = newest["close"]
+        if not base or not last or base <= 0 or last <= 0:
+            return None
+        return (last - base) / base * 100
+
     def fwd_returns_cross_section(self, date: str, horizon: int = 5) -> dict:
         """DL-24: 某日全市场前向收益截面 {code: 收益率(百分点)}。
 
