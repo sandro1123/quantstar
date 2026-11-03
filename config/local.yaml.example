@@ -1,0 +1,68 @@
+# QuantStar 本地配置示例 — 复制为 config/local.yaml 后修改
+#
+#   cp config/local.yaml.example config/local.yaml
+#
+# config/local.yaml 已在 .gitignore 中，不会被提交。本文件只是示例，
+# 展示如何覆盖 defaults/*.yaml 的任意键（后者被前者覆盖）。
+#
+# ⚠️ 本文件不含任何真实 key。key 请放环境变量或你自己的本地数据库。
+
+# ── 示例 1：最常见的用法 —— 用自己的 OpenAI 兼容服务 ─────────────────────
+# 只覆盖需要变的字段即可，其余沿用 defaults/llm.yaml。
+#
+# llm:
+#   providers:
+#     - name: my-endpoint
+#       url: https://your-gateway.example.com/v1/chat/completions
+#       model: your-model-name
+#       api_key_env: QS_LLM_API_KEY    # 你在 shell 里 export 的变量名
+#       rate_limit: 20
+#       timeout: 60
+#       priority: 1
+
+# ── 示例 2：本地网关 + sqlite key 库 ─────────────────────────────────────
+# 若你用自建网关（如 one-api / new-api / 各类 router），key 存在 sqlite 里，
+# 可以用 key_source 只读查询 —— 好处是 key 既不落 yaml 也不落 .env。
+#
+# llm:
+#   enable_discovery: false
+#   rotation: strict_priority
+#   providers:
+#     - name: local-gateway-primary
+#       url: http://127.0.0.1:3000/v1/chat/completions
+#       key_source:
+#         type: sqlite
+#         path: ~/my-gateway/db/data.sqlite          # 你自己的路径
+#         query: SELECT key FROM apiKeys WHERE name='my-key' AND isActive=1 ORDER BY id LIMIT 1
+#       model: your-model-name
+#       rate_limit: 20
+#       timeout: 60
+#       reasoning_floor: 6000     # 推理模型才需要；非推理模型可删
+#       priority: 1
+#
+#     - name: local-gateway-backup
+#       url: http://127.0.0.1:3000/v1/chat/completions
+#       key_source:
+#         type: sqlite
+#         path: ~/my-gateway/db/data.sqlite
+#         query: SELECT key FROM apiKeys WHERE name='my-key' AND isActive=1 ORDER BY id LIMIT 1
+#       model: another-model-name
+#       rate_limit: 10
+#       timeout: 45
+#       priority: 2
+
+# ── 示例 3：覆盖运维/风控参数 ────────────────────────────────────────────
+# 任意 defaults/*.yaml 里的键都能在这里覆盖。
+#
+# strategy:
+#   ic_horizon: 10              # IC 度量周期（交易日）
+#
+# execution:
+#   max_positions: 10
+#   max_single_stock_pct: 20.0
+#   initial_capital: 300000
+#
+# ops:
+#   disk_warning_pct: 85
+#   disk_alert_pct: 92
+#   disk_alert_floor_gb: 20

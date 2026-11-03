@@ -762,15 +762,18 @@ ops:
       e2e_verification: 600
       api_health_check: 60
 
-  # AG-QUOTA-2 件1 (2026-09-11): 配额真源 — 9router usageDaily sqlite mode=ro
+  # AG-QUOTA-2 件1 (2026-09-11): 配额真源 — 网关 usageDaily sqlite mode=ro
   # 直读 (照 llm.yaml key_source 同款通道先例)。degraded 显式位禁静默。
+  # Issue #15: 开源默认不写作者本机路径 —— source_path 留空 = 未启用配额
+  # 功能 (诚实 degraded, 不影响其它功能)。用自己的网关请在
+  # config/local.yaml 里覆盖本段 (示例见 config/local.yaml.example)。
   agent:
     quota:
-      daily_budget_requests: 3000     # Agent key 日预算 (当日真 requests)
+      daily_budget_requests: 3000     # 日预算 (当日真 requests)
       daily_budget_cost: 5.0          # 日成本预算 ($)
       low_remaining_pct: 0.30         # 剩余<30% 触发保守降级
-      source_path: ~/.10router/db/data.sqlite
-      api_key_hint: Hermes-Agent        # byApiKey 前缀匹配 hint (10router 有效 key)
+      source_path: ""                 # 空 = 未启用 (填入你的网关 db 路径以启用)
+      api_key_hint: ""                # 网关 key 名提示 (前缀匹配, 可选)
 
   # Q4: BEGIN IMMEDIATE 锁健康探针 — scripts/lock_probe.py 运行时读本段
   # (铁律 #9 例外已获批, 三约束: 短 busy_timeout / try-finally rollback / 频率限制,
