@@ -679,6 +679,36 @@ def collect_human_review_queue(conn, date: str) -> tuple[list, str | None]:
         evidence={"count": n, "oldest": rows["oldest"]},
         suggested_action_zh="查 hitl daemon 是否在跑 + 自动审批开关; 积压件按清算方案处理 (19作废+9自动批先例)")], asof
 
+# ── #S13-a 读图管道时点闸 (与 ops.yaml chart_analysis 段同源) ──────────
+CHART_SHADOW_SCHEDULE = "19:05"     # ops.yaml: ops.pipelines.chart_analysis.schedule
+CHART_SHADOW_TIMEOUT_S = 1200       # 同上 timeout_s
+# 定论时点 = 排程 + 预算 + 缓冲。过了这个点仍零行 = 真断电, 未到点 = 正常。
+CHART_SHADOW_DONE_HHMM = "20:30"
+
+
+def _chart_shadow_window_passed(date: str, now: str | None = None) -> bool:
+    """#S13-a: 读图管道是否已过「必有定论」的时点。
+
+    - 历史日期 (date < 今天) → True (那时候的管道早该跑完了);
+    - 当日 → 比较现在时刻与 CHART_SHADOW_DONE_HHMM;
+    - now 参数供测试注入 (生产 None → 取北京当前时刻)。
+
+    返回 False 表示「还没到点」, 此时零行是预期而非故障。
+    """
+    today = _today()
+    if date < today:
+        return True
+    if date > today:
+        return False          # 未来日期: 更不可能是断电
+    cur = now if now is not None else _now_hhmm()
+    return cur >= CHART_SHADOW_DONE_HHMM
+
+
+def _now_hhmm() -> str:
+    """当前北京时刻 HH:MM — 独立函数便于测试注入锁死。"""
+    return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%H:%M")
+
+
 def collect_chart_shadow(conn, date: str) -> tuple[list, str | None]:
     """#101 切3 影子模式观察项 (LLM 读图, 设计稿 §5/§6)。
 
@@ -688,6 +718,16 @@ def collect_chart_shadow(conn, date: str) -> tuple[list, str | None]:
       warning — 当日候选非零 (signal_provenance ∪ stock_pool, 切2
                  load_candidates 同口径) 但 chart_analysis 零行 = 读图
                  管道未跑/失败 (表建未通电复燃)。
+
+    #S13-a 时点闸 (2026-10-29): 原判据不区分小时 —— 读图管道排 19:05,
+    日报若在跑批前生成 (晨间排查/人工查询/quantmaster 补跑), 当日必然
+    零行 → 每天误报一次 (生产实证: 10-28/10-29 两条「候选 21 只但零行」,
+    而当天 19:05 跑完后表里 42/50 行). 现按「是否已过读图时点」分档:
+      未到点 (当日现在 < CHART_SHADOW_DONE_HHMM) 且零行 → info (未到点,
+        不是故障; 只留痕, 不入台账 — info 级本就被 sync 折叠);
+      已过点且零行 → warning (真断电)。
+    历史日期 (date < 今天) 无「未到点」概念 → 一律按已过点判。
+
     旧库无表 → 无 issue 不炸 (S12 同语义: 不是回归); degraded 只入证据面
     不判级 (6 周窗内 LLM 通道抖动属预期, 不收 issue 刷屏, 裁决日聚合)。
     """
@@ -733,12 +773,28 @@ def collect_chart_shadow(conn, date: str) -> tuple[list, str | None]:
         return [], None   # 候选源缺 = 旧库形态, 不判级
     if not n_cand:
         return [], None   # 假日/未排程日: 无信号无读图, 不发空警
+    # #S13-a 时点闸: read 管道排 19:05, 预算 1200s → 20:05 后必有定论
+    if not _chart_shadow_window_passed(date):
+        return [_issue(
+            source="chart_analysis_shadow", severity="info",
+            title_zh=f"读图未到点: {date} 候选 {n_cand} 只, 读图管道尚未产出",
+            detail_zh=(f"读图管道排 {CHART_SHADOW_SCHEDULE}, 当前尚未到定论时点"
+                       f" ({CHART_SHADOW_DONE_HHMM}); 当日零行属预期, 非故障"),
+            dedup_key=f"S13:chart_shadow_pending:{_compact_date(date)}",
+            evidence={"candidate_count": n_cand,
+                      "window_passed": False,
+                      "schedule": CHART_SHADOW_SCHEDULE,
+                      "decide_after": CHART_SHADOW_DONE_HHMM},
+            suggested_action_zh="无需处置; 若到定论时点后仍零行, 届时会升级为 warning")], None
     return [_issue(
         source="chart_analysis_shadow", severity="warning",
         title_zh=f"读图断电: {date} 候选 {n_cand} 只但 chart_analysis 零行",
-        detail_zh="信号候选非零但当日无读图记录 — 读图管道未跑或失败 (表建未通电形态)",
+        detail_zh=(f"信号候选非零但当日无读图记录, 且已过定论时点 "
+                   f"{CHART_SHADOW_DONE_HHMM} — 读图管道未跑或失败 "
+                   f"(表建未通电形态)"),
         dedup_key=f"S13:chart_shadow:{_compact_date(date)}",
-        evidence={"candidate_count": n_cand},
+        evidence={"candidate_count": n_cand, "window_passed": True,
+                  "decide_after": CHART_SHADOW_DONE_HHMM},
         suggested_action_zh=("查 orchestrator 当日 chart 段 dispatch/执行回执; "
                              "连续两日=报统筹裁排程"))], None
 

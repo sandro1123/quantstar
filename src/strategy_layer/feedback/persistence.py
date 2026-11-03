@@ -198,6 +198,36 @@ class WeightPersistence:
         if len(self._weight_history) > 60:
             self._weight_history = self._weight_history[-60:]
 
+    def ic_history_before(self, as_of_date: str) -> dict[str, list[float]]:
+        """返回严格早于 `as_of_date` 的每因子 IC 序列 (T-1 口径)。
+
+        用于权重调权：`target_date` 的权重只能用 `target_date` 之前的 IC 证据，
+        排除 `target_date` 自身（record_ic 写入的同日值若直接进调权即
+        T+0 看前瞻，违反 Issue #7「日级权重只依赖 T-1 及以前 IC」）。
+
+        纯只读，不改动内存 `_ic_history`（避免与 record_ic 的同日累计
+        混淆）；读 DB 而非内存，也绕过 `_load_ic_history` 里 `date('now')`
+        走 UTC 时区、与北京日 off-by-one 的隐患。
+        """
+        if self.db is None:
+            return {}
+        try:
+            conn = self.db.get_connection()
+            rows = conn.execute(
+                "SELECT factor_name, mean_ic FROM factor_ic "
+                "WHERE mean_ic IS NOT NULL AND calc_date < ? "
+                "ORDER BY calc_date ASC",
+                (as_of_date,),
+            ).fetchall()
+            history: dict[str, list[float]] = {}
+            for factor, ic in rows:
+                if factor and ic is not None:
+                    history.setdefault(factor, []).append(float(ic))
+            return history
+        except Exception as e:  # noqa: BLE001 — 降级返回空，不拖权重
+            logger.debug(f"ic_history_before skip ({as_of_date}): {e}")
+            return {}
+
     @property
     def ic_history(self) -> dict[str, list[float]]:
         return self._ic_history
