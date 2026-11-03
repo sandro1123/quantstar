@@ -15,6 +15,7 @@ from backtest_layer.paper_trading.runner import (
     read_signals_from_stock_pool,
     read_wfo_paper_weights,
 )
+from common.calendar import TradingCalendar
 from execution_layer.tables import init_execution_tables
 
 SIGNAL_DATE = "2026-08-19"
@@ -310,9 +311,25 @@ class TestGraduation:
         assert out["reason"] == "invalid_dates"
 
     def test_check_graduation_short_history_continues(self):
+        """毕业门禁按「交易日」计数 (Issue #10): 2026-08-01→2026-08-19
+        自然日 18 天, 但交易日更少 (~12 个), 仍 < 30 → continue。"""
         out = PaperTradingRunner().check_graduation(1.0, "2026-08-01", "2026-08-19")
         assert out["decision"] == "continue"
-        assert out["days"] == 18
+        assert out["days"] == TradingCalendar(db=None).trading_days_between(
+            "2026-08-01", "2026-08-19")
+        assert out["days"] < GRADUATION_MIN_DAYS
+
+    def test_check_graduation_trading_days_not_natural_days(self):
+        """Issue #10: 同一自然日跨度, 交易日计数严格小于等于自然日计数;
+        门禁以交易日为准 (周末/节假日不计入)。"""
+        # 2026-08-01 到 2026-08-31 自然日 30 天, 但交易日远少于 30
+        out = PaperTradingRunner().check_graduation(1.0, "2026-08-01", "2026-08-31")
+        cal = TradingCalendar(db=None)
+        expected = cal.trading_days_between("2026-08-01", "2026-08-31")
+        natural = 30
+        assert out["days"] == expected, f"应为交易日 {expected}, 实际 {out['days']}"
+        assert expected < natural, f"交易日计数 {expected} 不应等于自然日 {natural}"
+        assert out["decision"] == "continue", "交易日未达 30 → continue"
 
     def test_check_graduation_reads_sharpe_from_execution_ledger(self):
         """④: 纸交易 Sharpe 数据源 = 执行层账本净值曲线 (3 个净值点 → 可算)"""
