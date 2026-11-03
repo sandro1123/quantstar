@@ -9,4 +9,16 @@ backtest:
     slippage_rate: 0.001
   metrics:
     benchmark: equal_weight
+  # WFO 防泄漏 (Issue #5)。purge/embargo 是切分口径, 不设默认值等于放过泄漏。
+  #   purge_days:   训练段末尾裁掉的天数。标签是「未来 N 日收益」时, 训练段
+  #                 最后 N 天的标签会用到测试段价格 —— 必须裁掉。取 0 = 关闭,
+  #                 此时 wf_result.leakage_risk=true 显式留痕 (不静默)。
+  #   embargo_days: 测试段开头再留的隔离带, 防相邻日特征自相关给 OOS 注水。
+  # 生产用它做 OOS 结论前, purge_days 至少 >= 标签 horizon (5 日标签 → 5)。
   walk_forward:
+    n_windows: 5
+    min_window_days: 60
+    anchored: false
+    is_ratio: 0.7
+    purge_days: 5         # 与 hold_days=5 的标签 horizon 对齐
+    embargo_days: 1
