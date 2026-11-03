@@ -1,5 +1,17 @@
-"""交易日历 — A 股交易日判断，支持从 DB 加载实际交易日"""
+"""交易日历 — A 股交易日判断，支持从 DB 加载实际交易日
+
+#14-b 静态表过期告警: 内置节假日表只覆盖到 _STATIC_COVERAGE_END。超过该日期
+仍走静态 fallback 时, `is_trading_day` 会把未登记的节假日当交易日 — 静默失效。
+Issue #14 原话「至少应在表过期时告警而非静默当作交易日」。故:
+  - `static_table_stale_by(date)` 返回距表末的天数 (未过期 <=0);
+  - `static_table_warning(date, lead_days)` 在临近/已过期时返回告警文案, 否则 None;
+  - 调用方 (ops 健康检查) 拿它发 alert。本模块只出判据, 不发告警 — 保持纯函数。
+"""
 from datetime import datetime, timedelta
+
+# 静态表覆盖的最后一个日期 (与本文件 _build_holidays 的最晚登记日同源,
+# 改表必须同步改这里 — 测试 test_calendar_static_coverage_marker_matches_table 钉住)。
+_STATIC_COVERAGE_END = "2027-12-31"
 
 
 class TradingCalendar:
@@ -43,6 +55,45 @@ class TradingCalendar:
         if dt.weekday() >= 5:
             return False
         return date_str not in self._holidays
+
+    # -- #14-b 静态表过期判据 (纯函数, 不告警) ----------------------------
+
+    @staticmethod
+    def static_table_end() -> str:
+        """静态表覆盖末日 (YYY-MM-DD)。"""
+        return _STATIC_COVERAGE_END
+
+    @staticmethod
+    def static_table_stale_by(date_str: str) -> int:
+        """距静态表末日的天数 — 已过期为正数, 未过期为 <=0。
+
+        语义: 返回 >0 表示 date_str 已超出静态表覆盖, 此日之后的节假日
+        不会被 _build_holidays 识别 (静默当作交易日)。
+        """
+        end = datetime.strptime(_STATIC_COVERAGE_END, "%Y-%m-%d")
+        cur = datetime.strptime(date_str, "%Y-%m-%d")
+        return (cur - end).days
+
+    @staticmethod
+    def static_table_warning(date_str: str, lead_days: int = 90) -> str | None:
+        """临近/超过静态表末日时返回告警文案; 未临近返回 None。
+
+        lead_days: 提前多少天开始提醒 (默认 90 天 ≈ 一个季度, 足够排期补表)。
+        返回 None 是正常态 — 调用方据 None/非 None 决定是否发告警。
+        """
+        stale = TradingCalendar.static_table_stale_by(date_str)
+        if stale > 0:
+            return (f"交易日历静态表已过期 {stale} 天 (覆盖至 "
+                    f"{_STATIC_COVERAGE_END}, 当前判断日 {date_str}) — "
+                    f"此后日期按「周末+已知节假日」推算, 未登记的节假日会被"
+                    f"误判为交易日, 交易日计数/毕业门禁/回测窗口全部受影响。"
+                    f"请更新 src/common/calendar.py 的 _build_holidays 与 "
+                    f"_STATIC_COVERAGE_END。")
+        if stale >= -lead_days:
+            return (f"交易日历静态表将于 {_STATIC_COVERAGE_END} 到期 "
+                    f"(剩 {-stale} 天, 提醒阈值 {lead_days} 天) — "
+                    f"请提前登记下一年的节假日表。")
+        return None
 
     def is_trading_day(self, date_str: str) -> bool:
         if self._trading_days is None:
