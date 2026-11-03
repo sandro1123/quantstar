@@ -2002,7 +2002,46 @@ class PipelineOrchestrator:
                 result["source_data_health_alerts"] = source_alerts
         except Exception as e:
             logger.warning(f"source data health skipped (fail-safe): {e}")
+        # #14-b: 交易日历静态表过期哨 — Issue #14 要求「至少应在表过期时告警
+        # 而非静默当作交易日」。日历本身只出判据 (纯函数), 告警在这里发;
+        # 接入现有 health_check 不新增 crontab (铁律 #11)。
+        # 去重: 同标题仅一条 open (AlertManager 状态机), 不会每天 3 次轰炸。
+        try:
+            cal_warn = self._check_calendar_expiry()
+            if cal_warn:
+                result["calendar_expiry"] = True
+        except Exception as e:
+            logger.warning(f"calendar expiry check skipped (fail-safe): {e}")
         return HandlerResult(success=True, metadata=result)
+
+    def _check_calendar_expiry(self) -> str | None:
+        """#14-b: 静态节假日表过期/临近过期 → warning 告警。返回告警文案或 None。
+
+        为什么要这块: P0 只把 2027 年节假日补进表, 但没有「表要用完了」的
+        信号 —— 到 2028 年又会静默把未登记节假日当交易日, 影响交易日计数、
+        毕业门禁天数、回测窗口切分。判据在 TradingCalendar (纯函数),
+        本方法只负责接线 + 告警 (单一职责)。
+        """
+        from common.calendar import TradingCalendar
+        from common.utils import bj_date
+        from ops_layer.core.models import Alert
+
+        date = bj_date()
+        msg = TradingCalendar.static_table_warning(date)
+        if not msg:
+            return None
+        logger.warning(f"[calendar] {msg}")
+        try:
+            self.alert_manager.send(Alert(
+                severity="warning", layer="common",
+                title="交易日历静态表临近过期" if "将于" in msg else "交易日历静态表已过期",
+                detail=msg,
+                action=("更新 src/common/calendar.py 的 _build_holidays 与 "
+                        "_STATIC_COVERAGE_END, 补登记下一年 A 股节假日"),
+            ))
+        except Exception as e:  # noqa: BLE001 — 告警失败不阻断健康检查
+            logger.warning(f"calendar expiry alert send failed (fail-safe): {e}")
+        return msg
 
     def _run_source_data_health(self, app) -> list[str]:
         """DL-26: 源数据层交叉验证 + 告警 (复用 OPS-07 告警闭环, 不造第二套)。
@@ -2952,8 +2991,12 @@ class PipelineOrchestrator:
                 n_updated = 0
             elif current_weights:
                 is_monday = datetime.strptime(target_date, "%Y-%m-%d").weekday() == 0
+                # #7 T-1 口径: 今日权重只能依赖 T-1 及以前 IC —— target_date 自身
+                # 的 IC 已由 record_ic 写入 wp.ic_history，直接传等于 T+0 看前瞻。
+                # 改为 DB 侧严格小于 target_date 的序列（参考
+                # persistence.ic_history_before，绕过 date('now') UTC 时区陷阱）。
                 new_weights = tuner.update_weights_with_decay(
-                    current_weights, wp.ic_history,
+                    current_weights, wp.ic_history_before(target_date),
                     weight_history=wp.weight_history, is_monday=is_monday,
                 )
                 wp.record_weights(new_weights)
