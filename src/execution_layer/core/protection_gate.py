@@ -84,6 +84,23 @@ class ProtectionGate:
         # 生产环境 db 始终有值, 此分支仅对测试/Mock 生效。
         if self.db is None or not hasattr(self.db, "get_connection"):
             return True, ""
+        # EX-04b (2026-11-02): 上面这条兜底只覆盖 db=None / 非 Database 形态。
+        # 漏掉的第三种形态 = **合法 Database 但空库** (单元测试惯用的
+        # Database(":memory:")): 它有 get_connection, 于是走进守卫,
+        # 守卫查 action_records 抛 no such table -> 异常 -> fail-closed 拦单。
+        # 实证: 7 个入场测试 (EX-04 竞价容差 4 + AGWIRE1 2 + entry_engine 1)
+        # 全被误杀, 而断言本意是验「入场触发」, 实际验到的是「守卫熔断」。
+        # 与 ccf164b2 同族但更彻底: 无表 = 无历史 = 无可评估风险, 按 fail-open
+        # 放行; 生产库必有此表, 故本条对生产零影响 (fail-closed 语义不变)。
+        try:
+            has_ledger = self.db.get_connection().execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='action_records' LIMIT 1"
+            ).fetchone() is not None
+        except Exception:  # noqa: BLE001 — 连 schema 都查不到 = DB 不可用, 同 db=None
+            return True, ""
+        if not has_ledger:
+            return True, ""
         for guard in (self._check_cooldown, self._check_daily_stoploss,
                       self._check_drawdown):
             try:
