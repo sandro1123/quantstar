@@ -475,6 +475,8 @@ class TestGraduationWiring:
         assert "config missing" in result["reason"]
 
     def test_min_days_not_met_continues(self):
+        """Issue #10: 毕业门禁天数按「交易日」计数，而非自然日。
+        2026-08-20→2026-08-27 自然日 7 天，但周末不计入 → 交易日更少。"""
         class _Cfg(dict):
             def get(self, key, default=None):
                 return super().get(key, default)
@@ -484,8 +486,11 @@ class TestGraduationWiring:
         })
         runner = PaperTradingRunner(db=None, config=cfg)
         result = runner.run_graduation_check("2026-08-27")
+        cal = TradingCalendar(db=None)
+        expected = cal.trading_days_between("2026-08-20", "2026-08-27")
         assert result["decision"] == "continue"
-        assert result["days"] == 7
+        assert result["days"] == expected
+        assert expected < 7, f"交易日 {expected} 应小于自然日 7 (排除周末)"
 
     def test_orchestrator_meta_includes_graduation(self):
         """接线守卫: _run_paper_trading 源码必须含 run_graduation_check 调用"""
