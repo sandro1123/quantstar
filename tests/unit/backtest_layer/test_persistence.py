@@ -114,6 +114,25 @@ class TestBacktestRunStore:
         assert row["wf_efficiency"] == 0.7
         assert row["wf_consistency"] == 0.8
 
+    def test_wf_oos_efficiency_key_aligned(self):
+        """P1-c: walk_forward 产出的键名是 `oos_efficiency` (非 `efficiency`),
+        persistence 兼容读须把 oos_efficiency 写入 backtest_runs.wf_efficiency。
+        G7 键名对齐 — 生产者产出的键, 消费者读得到, wf_efficiency 不再恒 NULL。"""
+        store = BacktestRunStore(_Db())
+        run_id = store.save(_report(mode="walk_forward",
+                                    wf_result={"oos_efficiency": 0.62, "stability_score": 0.71}))
+        row = store.get_run(run_id)
+        assert row["wf_efficiency"] == 0.62, f"oos_efficiency 未对齐写入: {row['wf_efficiency']}"
+        assert row["wf_consistency"] == 0.71
+
+    def test_wf_oos_efficiency_none_when_absent(self):
+        """walk_forward 未产出效率比时 wf_efficiency 应为 None (诚实三态, 不拿 0 冒充)。"""
+        store = BacktestRunStore(_Db())
+        run_id = store.save(_report(mode="walk_forward", wf_result={}))
+        row = store.get_run(run_id)
+        assert row["wf_efficiency"] is None
+        assert row["wf_consistency"] is None
+
 
 class TestLayerGate:
     def _input(self) -> BacktestInput:
