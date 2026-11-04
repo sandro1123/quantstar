@@ -38,7 +38,9 @@ DEFAULTS = {
     "change_pct_divergence": 1.0,   # 百分点: change_pct 与重算值背离阈值
     "mad_multiplier": 3.0,          # 批内 change_pct 超 N 倍 MAD 判 outlier
     "mad_field": "change_pct",
-    "zero_pct_batch_ratio": 0.5,    # 批内 change_pct=0 占比超此值判整批清零异常
+    "zero_pct_batch_ratio": 0.5,
+    "mad_mode": "relative_20d",
+    "mad_rel_threshold": 15.0,    # 批内 change_pct=0 占比超此值判整批清零异常
     # 判据 #186 量/额维度不变量: 额[元]/量[股] 应 ~= 股价。
     # 经验区间取 [vap_ratio_lo, vap_ratio_hi] 倍 close 的宽包络:
     # 实测 5 天干净行 0 假阳 / 3 天污染行命中 98.95%。
@@ -151,19 +153,32 @@ class DLQ:
 
 
 def check_kline_batch(records: list[dict], cfg: dict | None = None,
-                      exempt_pre_close: set | None = None) -> dict[str, list[dict]]:
+                      exempt_pre_close: set | None = None,
+                      hist_fn: callable | None = None,
+                      mad_mode: str | None = None,
+                      mad_rel_threshold: float | None = None) -> dict[str, list[dict]]:
     """对一批 kline 记录跑规则集, 返回 {code: [flag,...]}。不改 records 原值。
 
     规则 (全部配置化): pre_close<=0 / change_pct 背离 / close 越界 /
-    volume<0 / high<low / 批内 MAD。
+    volume<0 / high<low / 批内 MAD 或相对前20日中位数偏离 (P2-a)。
 
     exempt_pre_close: {(code, date)} 集合 — 已在 data_quality_flags 标记为
     rule='pre_close_unrecoverable' 的存量不可回补行 (DL-38)。对这些行跳过
     pre_close<=0 规则, 避免重写时反复报 suspicious (狼来了)。其余规则照常。
+
+    hist_fn: 可选, callable(code, date) -> list[float] (该 code 在 date 前的
+    历史 change_pct 列表)。mad_mode="relative_20d" 时使用, 与该股自身历史比
+    而非批内绝对 MAD, 抗剧烈波动日误报。hist 不足(<3 点) 时该记录的 MAD
+    规则跳过 (诚实, 不伪造, 不误报)。
     """
     cfg = cfg or dict(DEFAULTS)
     exempt_pre_close = exempt_pre_close or set()
     flags_by_code: dict[str, list[dict]] = {}
+
+    mode = mad_mode or cfg.get("mad_mode", "batch")
+    rel_thr = mad_rel_threshold if mad_rel_threshold is not None \
+        else float(cfg.get("mad_rel_threshold", DEFAULTS["mad_rel_threshold"]))
+    use_relative = (mode == "relative_20d") and (hist_fn is not None)
 
     def add(r: dict, field: str, flag: str, reason: str, rule: str):
         flags_by_code.setdefault(r.get("code", "?"), []).append({
@@ -231,10 +246,28 @@ def check_kline_batch(records: list[dict], cfg: dict | None = None,
                 f"change_pct=0 且批内清零占比 {ratio:.1%} 超 {zero_thr:.0%} (疑似整批清零异常)",
                 "batch_change_pct_zeroed")
 
-    # 批内 MAD 规则 (需要整批上下文)
+    # MAD 规则 (需要整批上下文, 或前20日历史)
     vals = [r.get(mad_field) for r in records
             if isinstance(r.get(mad_field), (int, float))]
-    if len(vals) >= 10:
+    if use_relative:
+        # P2-a: 相对前20日中位数偏离 — 与该股自身历史比, 抗波动日误报
+        for r in records:
+            v = r.get(mad_field)
+            if not isinstance(v, (int, float)):
+                continue
+            code = r.get("code", "?")
+            date = str(r.get("date", ""))[:10]
+            hist = hist_fn(code, date) if hist_fn else []
+            hist = [h for h in hist if isinstance(h, (int, float))]
+            if len(hist) < 3:
+                continue  # 历史不足, 诚实跳过, 不伪造, 不误报
+            hist_med = statistics.median(hist)
+            if abs(v - hist_med) > rel_thr:
+                add(r, mad_field, "outlier",
+                    f"{mad_field}={v} 相对前20日中位数 {hist_med:.2f} 偏离超 {rel_thr}% (mad_outlier)",
+                    "mad_outlier")
+    elif len(vals) >= 10:
+        # 批内绝对 MAD (旧模式, 向后兼容)
         med = statistics.median(vals)
         mad = statistics.median([abs(v - med) for v in vals])
         if mad > 1e-9:
@@ -287,7 +320,25 @@ class KlineQualityGate:
             has_bad_pre_close = any(
                 (r.get("pre_close") or 0) <= 0 for r in records)
             exempt = self._load_unrecoverable_exempt() if has_bad_pre_close else None
-            flags_by_code = check_kline_batch(records, self.cfg, exempt_pre_close=exempt)
+            # P2-a: relative_20d 模式下, 从 db 查该 code 在 date 前 20 日 change_pct
+            hist_fn = None
+            if str(self.cfg.get("mad_mode", "batch")) == "relative_20d":
+                def _make_hist_fn(db, conn_getter):
+                    def hist_fn(code, date):
+                        try:
+                            conn = conn_getter()
+                            rows = conn.execute(
+                                "SELECT change_pct FROM daily_klines "
+                                "WHERE code = ? AND date < ? "
+                                "ORDER BY date DESC LIMIT 20",
+                                (code, date)).fetchall()
+                            return [r[0] for r in rows if isinstance(r[0], (int, float))]
+                        except Exception:
+                            return []
+                    return hist_fn
+                hist_fn = _make_hist_fn(self.db, self.db.get_connection)
+            flags_by_code = check_kline_batch(records, self.cfg, exempt_pre_close=exempt,
+                                              hist_fn=hist_fn)
             if not flags_by_code:
                 return records
             all_flags = [f for fl in flags_by_code.values() for f in fl]
