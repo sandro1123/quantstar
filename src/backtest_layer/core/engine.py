@@ -175,10 +175,7 @@ class BacktestEngine:
             mode = PortfolioMode(broker, data_layer, strategy_layer)
             report = mode.run(input)
         elif input.mode == "walk_forward":
-            from backtest_layer.modes.walk_forward import (
-                WalkForwardConfig,
-                WalkForwardMode,
-            )
+            from backtest_layer.modes.walk_forward import WalkForwardMode
             mode = WalkForwardMode(
                 broker, data_layer, strategy_layer,
                 config=self._build_wf_config(input))
