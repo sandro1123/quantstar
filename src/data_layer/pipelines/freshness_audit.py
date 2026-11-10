@@ -134,7 +134,8 @@ class FreshnessAuditPipeline(BasePipeline):
             fresh = bool(info.get("fresh"))
             actual = input.date if fresh else None
             written += self._write_row(conn, input.date, table, actual, fresh,
-                                       skipped=skipped)
+                                       skipped=skipped,
+                                       pending_recollect=info.get("pending_recollect"))
 
         # 哨兵④ (09-05): stock_financials 公告新鲜度 — 独立键, 与上面按
         # date (报告期末日) 的旧行 (恒滞后假警报 95,040min 同族) 区分。
@@ -155,6 +156,54 @@ class FreshnessAuditPipeline(BasePipeline):
             metadata={"tables_audited": written},
         )
 
+
+    def reconcile_recollect_backed(self, audit_date: str) -> dict:
+        """P2-c: 补采轮跑完后的二次核验 — 把 delayed_by_recollect 收敛为终态。
+
+        为什么必须有这一步: 若只有「16:22 记 pending」而没有事后复核,
+        补采真失败时就永远停在 pending = 假绿 (判例 #5 信号常量化同族)。
+        本方法用**同一判据** (当日行数) 复核:
+          - 有行 → ok (补采履约)
+          - 无行 → missing (补采也空 = 真断供, 次日审计与 S5 照常显形)
+
+        幂等; 只动 status='delayed_by_recollect' 的行, 不碰其它状态。
+        由 orchestrator 收盘段在 shortterm_recollect 成功后调用。
+        """
+        conn = self.db.get_connection() if self.db else None
+        if conn is None:
+            return {"checked": 0, "ok": 0, "missing": 0}
+        readiness = DataReadiness(self.db)
+        out = {"checked": 0, "ok": 0, "missing": 0}
+        rows = conn.execute(
+            "SELECT table_name FROM freshness_audit "
+            "WHERE date=? AND status='delayed_by_recollect' ORDER BY table_name",
+            (audit_date,)).fetchall()
+        if not rows:
+            return out
+        collect = readiness.check_collect_freshness(audit_date)
+        for r in rows:
+            table = r[0]
+            info = collect.get(table) or {}
+            fresh = bool(info.get("fresh"))
+            out["checked"] += 1
+            if fresh:
+                out["ok"] += 1
+                conn.execute(
+                    "UPDATE freshness_audit SET status='ok', actual_at=?, delay_min=0 "
+                    "WHERE date=? AND table_name=? AND status='delayed_by_recollect'",
+                    (audit_date, audit_date, table))
+            else:
+                out["missing"] += 1
+                conn.execute(
+                    "UPDATE freshness_audit SET status='missing' "
+                    "WHERE date=? AND table_name=? AND status='delayed_by_recollect'",
+                    (audit_date, table))
+        conn.commit()
+        if out["missing"]:
+            logger.warning(
+                f"补采后复核: {audit_date} 仍有 {out['missing']} 张表无数据 "
+                f"(真断供, 已转 missing)")
+        return out
 
     def _alert_missing(self, conn, audit_date: str) -> int:
         """当日判为 missing 的表聚合成**一条**告警。返回 missing 表数。
@@ -232,7 +281,8 @@ class FreshnessAuditPipeline(BasePipeline):
 
     def _write_row(self, conn, audit_date: str, table: str,
                    actual: str | None, has_data: bool,
-                   skipped: bool = False) -> int:
+                   skipped: bool = False,
+                   pending_recollect: str | None = None) -> int:
         if skipped:
             # 假日工件表 (卡组二刀1): 落 status='skipped' 显形 —
             # 「假日缺」不是「无信息」 (铁律#12)。delay=None (无滞后语义),
@@ -243,6 +293,23 @@ class FreshnessAuditPipeline(BasePipeline):
                     "(date, table_name, expected_by, actual_at, delay_min, status) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (audit_date, table, audit_date, None, None, "skipped"),
+                )
+                return 1
+            except Exception as e:
+                logger.warning(f"freshness_audit write failed for {table}: {e}")
+                return 0
+        if pending_recollect and not has_data:
+            # P2-c: 本表由后置补采轮 ({pending_recollect}) 负责, 本审计时点早于
+            # 其运行窗。此刻判 missing 是每天假阳 (10-27/10-30/11-02/11-03 实证:
+            # 同一批 5 表; 而用同版代码复跑同库该日全部 fresh=True)。
+            # 也不判 ok — 补采若真失败必须仍能显形。⇒ 独立第三态。
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO freshness_audit "
+                    "(date, table_name, expected_by, actual_at, delay_min, status) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (audit_date, table, audit_date, None, None,
+                     "delayed_by_recollect"),
                 )
                 return 1
             except Exception as e:

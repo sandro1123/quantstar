@@ -1656,6 +1656,20 @@ class PipelineOrchestrator:
             "partial": is_partial,
         })
 
+        # P2-c (2026-11-11): 补采轮跑完后二次核验 freshness_audit 的 pending 行。
+        # 16:22 审计时这 5 张表尚未补采 → 记 delayed_by_recollect (不报红);
+        # 此刻补采已跑, 用同一判据复核收敛为 ok / missing (真断供才转 missing)。
+        # 不这样做则 pending 会永久停留 = 假绿 (判例 #5 同族)。
+        # fail-safe: 核验失败只 warning, 不影响补采本身已成功的事实。
+        try:
+            fa = _pipelines.get("freshness_audit")
+            if fa is not None and is_success:
+                rec = fa.reconcile_recollect_backed(date)
+                if rec.get("checked"):
+                    meta["freshness_reconciled"] = rec
+        except Exception as e:
+            logger.warning(f"freshness pending 复核 skipped (fail-safe): {e}")
+
         return HandlerResult(
             success=is_success,
             records_written=records,
@@ -1981,6 +1995,18 @@ class PipelineOrchestrator:
                 result["escalated_alerts"] = len(escalated)
         except Exception as e:
             logger.warning(f"check_escalation skipped (fail-safe): {e}")
+        # P1-a (2026-11-11): 陈旧告警收敛 — 原 scripts/cleanup_stale_alerts.py
+        # 是孤儿工具 (无 crontab、无调用点), 生产 15 条 open 中最早可追到 09-01
+        # (71 天未解)。改为接入 health_check 的按证据收敛:
+        #   **只关闭「其宿主管道此后已恢复成功」的告警**, 不做「超时就关」——
+        #   超时自动关 = 「抑制的前提是有人会去消解」的反面 (判例 #9),
+        #   会把真问题关成假绿。无证据支持的陈旧告警保持 open 并升级。
+        try:
+            closed = self._reap_resolved_stale_alerts()
+            if closed:
+                result["stale_alerts_reaped"] = closed
+        except Exception as e:
+            logger.warning(f"stale alert reap skipped (fail-safe): {e}")
         # G4 盲区补偿 (2026-08-24夜): quality_check 型管道死于 start_run 前
         # 只留 observability_fallback.jsonl 条目; 此处补扫升格为 alerts 行。
         # 接入现有 health_check 不新增 crontab (铁律 #11); 失败只 warning 不阻断。
@@ -2013,6 +2039,76 @@ class PipelineOrchestrator:
         except Exception as e:
             logger.warning(f"calendar expiry check skipped (fail-safe): {e}")
         return HandlerResult(success=True, metadata=result)
+
+    def _reap_resolved_stale_alerts(self, min_age_days: int = 7) -> int:
+        """P1-a: 按**证据**收敛陈旧 open 告警, 返回实际关闭条数。
+
+        与 scripts/cleanup_stale_alerts.py 的本质区别:
+          - 那个脚本按「超时 N 天」一刀切关 —— 判例 #9 (抑制的前提是有人会
+            去消解) 的反面, 会把真问题关成假绿, 正是它一直没被接线的原因;
+          - 本方法只在**有恢复证据**时关: 告警标题里含管道名, 且该管道在
+            告警创建之后已有 success 运行 → 症状确已消失 → 关闭并留痕。
+
+        判据链 (全部可查, 无「以为」):
+          1. status='open' 且 created_at 早于 min_age_days 天;
+          2. 从标题/详情里解析出管道名 (取自 pipeline_runs 的真实名字集合,
+             **不做模糊猜测** — 匹配不到就不关);
+          3. 该管道存在 start_time > alert.created_at 的 success 行;
+          4. 关闭时 action 追加证据 (恢复运行的 start_time), 供事后对账。
+
+        无证据的陈旧告警**保持 open** — 那是真需要人看的东西。
+        """
+        from common.utils import bj_now
+
+        conn = self.db.get_connection()
+        try:
+            pipes = [r[0] for r in conn.execute(
+                "SELECT DISTINCT pipeline_name FROM pipeline_runs").fetchall()]
+        except Exception as e:
+            logger.warning(f"stale reap: 读管道名失败, 跳过 (fail-safe): {e}")
+            return 0
+        if not pipes:
+            return 0
+
+        rows = conn.execute(
+            "SELECT id, title, detail, action, created_at FROM alerts "
+            "WHERE status='open' AND created_at < datetime('now', 'localtime', ?) "
+            "ORDER BY created_at",
+            (f"-{int(min_age_days)} day",),
+        ).fetchall()
+        if not rows:
+            return 0
+
+        now = bj_now()
+        closed = 0
+        for r in rows:
+            haystack = f"{r['title'] or ''} {r['detail'] or ''}"
+            hit = next((p for p in pipes if p and p in haystack), None)
+            if not hit:
+                continue  # 认不出宿主管道 → 不关 (宁可留着让人看)
+            try:
+                rec = conn.execute(
+                    "SELECT start_time FROM pipeline_runs "
+                    "WHERE pipeline_name=? AND status='success' AND start_time > ? "
+                    "ORDER BY start_time DESC LIMIT 1",
+                    (hit, r["created_at"]),
+                ).fetchone()
+            except Exception:
+                continue
+            if not rec:
+                continue  # 该管道告警后从未成功 → 症状可能仍在, 保持 open
+            evidence = (f"{r['action'] or ''} | stale reap: {hit} 于 "
+                        f"{rec['start_time']} 已恢复成功 (P1-a 证据收敛)").strip(" |")
+            conn.execute(
+                "UPDATE alerts SET status='resolved', resolved_at=?, action=? "
+                "WHERE id=? AND status='open'",
+                (now, evidence, r["id"]),
+            )
+            closed += 1
+            logger.info(f"stale alert #{r['id']} ({hit}) 已按恢复证据关闭")
+        if closed:
+            conn.commit()
+        return closed
 
     def _check_calendar_expiry(self) -> str | None:
         """#14-b: 静态节假日表过期/临近过期 → warning 告警。返回告警文案或 None。
@@ -2141,8 +2237,16 @@ class PipelineOrchestrator:
     def _run_anomaly_detection(self, report) -> list[dict]:
         """F6.3: 记录健康历史 + 跨进程连续判定 + 最近运行扫描, 异常走 AlertManager。
 
-        只接检测→告警; auto_healer 的破坏性 runbook (重启/清数/切换) 不自动触发,
-        保留人工调用 (见 REPAIR_TRACKER F6.3 决策)。检测自身失败不影响健康检查主流程。
+        P1-a (2026-11-11): consecutive_failures 异常额外走 AutoHealer 自愈分派。
+        原实现只检测→告警, auto_healer 全部 runbook (含 _heal_failover) 永不触发,
+        结果是「异常检测: consecutive_failures」自 2026-10-26 09:00 创建后一直 open
+        到 11-02 仍无人解 (issue #192)。解冻口径的边界:
+          - **只解冻 consecutive_failures 一族** (failover 语义 = 该管道已被判定
+            连续失败, 自愈动作是「记录+按原管道重跑一次」, 非破坏性);
+          - **switch_source / purge_old_data 等破坏性 runbook 仍不自动触发**
+            (D-30 冻结口径不变, 人工调用);
+          - 自愈自身失败只 warning, 不影响告警主链 (fail-safe, 铁律 #12 留痕)。
+        检测自身失败不影响健康检查主流程。
         """
         try:
             from ops_layer.anomaly_detector import AnomalyDetector
@@ -2188,12 +2292,55 @@ class PipelineOrchestrator:
                     detail=a.get("detail", ""),
                     action="检查 pipeline_runs / health_history 并手动干预",
                 ))
+
+            # P1-a (2026-11-11): consecutive_failures 解冻自愈分派。
+            # 只对这一族走 AutoHealer (非破坏性 failover), 其余 runbook 保持
+            # D-30 冻结口径不自动触发。自愈结果写入 action_log 供事后对账。
+            self._dispatch_autonomous_heal(anomalies)
+
             if anomalies:
                 logger.warning(f"Anomaly detection found {len(anomalies)} issue(s)")
             return anomalies
         except Exception as e:
             logger.warning(f"Anomaly detection skipped (fail-safe): {e}")
             return []
+
+    # P1-a: 允许自动自愈的异常族白名单 (与 D-30 冻结面显式划界)。
+    # 只有这两个非破坏性 runbook 自动触发; 其余 (switch_source/purge_old_data/
+    # reset_baseline) 一律留给人工 —— 白名单而非黑名单 (判例 #16)。
+    _AUTONOMOUS_HEAL_TYPES = frozenset({"consecutive_failures", "pipeline_failure"})
+
+    def _dispatch_autonomous_heal(self, anomalies: list[dict]) -> list[dict]:
+        """P1-a: 对白名单内的异常族跑 AutoHealer, 返回逐条自愈结果。
+
+        与告警链路解耦: 告警先发 (保证「有人知道」), 自愈后跑
+        (可能改变系统状态)。任一条自愈失败只 warning, 不中断其余条目。
+        """
+        healed: list[dict] = []
+        if not anomalies:
+            return healed
+        try:
+            from ops_layer.auto_healer import AutoHealer
+            healer = AutoHealer(self.db, orchestrator=self,
+                                alert_manager=self.alert_manager)
+        except Exception as e:
+            logger.warning(f"auto-heal skipped (init failed, fail-safe): {e}")
+            return healed
+
+        for a in anomalies:
+            atype = a.get("anomaly_type", "")
+            if atype not in self._AUTONOMOUS_HEAL_TYPES:
+                logger.info(f"auto-heal: {atype} 不在白名单内, 保持人工处置 (D-30)")
+                continue
+            try:
+                res = healer.heal(a)
+                healed.append({"anomaly": atype, **res})
+                logger.info(f"auto-heal: {atype} -> {res.get('status')} "
+                            f"({res.get('action')})")
+            except Exception as e:
+                logger.warning(f"auto-heal failed for {atype} (fail-safe): {e}")
+                healed.append({"anomaly": atype, "status": "error", "error": str(e)})
+        return healed
 
     def _run_pre_market_refresh(self, cfg: dict):
         from bootstrap import bootstrap_app

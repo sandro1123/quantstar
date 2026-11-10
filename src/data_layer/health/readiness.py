@@ -89,6 +89,39 @@ class DataReadiness:
         "lhb_daily": "date",
     }
 
+    # P2-c (2026-11-11): 补采轮已知时点注册表 —— 「审计时点早于数据到达时点」
+    # 的显式解法 (判例 #11: 判据执行时点 ≠ 数据到达时点)。
+    #
+    # 病灶实证 (生产 qs.db freshness_audit 逐日史):
+    #   10-27 / 10-30 / 11-02 / 11-03 四天各有 **同样这 5 张表** 被判 missing,
+    #   而 shortterm_recollect 17:00 前 (16:40) 每日 success 补采。
+    #   复核: 用生产同一份代码对同一份库重跑 check_collect_freshness("2026-11-02"),
+    #   这 5 张表全部 fresh=True (355/28/30/30/630 行)。⇒ 不是没数据, 也不是
+    #   判据写错, 是 **16:22 判了 16:40 才补的东西**。
+    #
+    # 语义边界 (为什么不是「无脑判 ok」):
+    #   - 仍记 missing 会每天假阳 (alert#127 同族), 且 S5/日报跟着红;
+    #   - 直接判 ok 会掩盖「补采也失败」的真实断供 — 那是更坏的假绿。
+    #   ⇒ 用**独立状态** delayed_by_recollect: 既不当 missing 报红, 也不当 ok
+    #     骗人; 由补采轮跑完后的二次核验 (orchestrator 收盘段) 落最终状态。
+    #
+    # 表名→补采轮所属管道。未列入本册的表保持原判 (当日无行=missing)。
+    # 表名→补采轮所属管道 + 该轮的计划时点 (HH:MM)。
+    # **只有当前时刻早于补采轮计划时点**才判 pending —— 这保证了:
+    #   - 16:22 审计时 (补采未跑) → delayed_by_recollect, 不每天假阳;
+    #   - 补采轮跑过后再查 (16:40 之后 / 次日回看) → 仍按 missing 如实显形。
+    # 否则「交易日 0 行必须显形」这条硬约束会被 pending 洗掉 (假绿)。
+    RECOLLECT_BACKED_TABLES = {
+        "limit_up_ladder": "shortterm_recollect",
+        "limit_break_pool": "shortterm_recollect",
+        "hot_stock_history": "shortterm_recollect",
+        "skyrocket_list": "shortterm_recollect",
+        "stock_anomaly_reasons": "shortterm_recollect",
+    }
+    # 补采轮计划时刻 (与 config/defaults/ops.yaml shortterm_recollect.schedule 同源;
+    # 生产实际 crontab 为 16:40, 代码默认 16:30 — 取较早者做保守边界)。
+    RECOLLECT_WINDOW_START = "16:30"
+
     def __init__(self, db: Database):
         self.db = db
 
@@ -119,6 +152,18 @@ class DataReadiness:
                 # 「假日缺」不是「无信息」(铁律#12: 判了没广播同族)。
                 result[table] = {"fresh": None, "rows": 0, "skipped": "holiday"}
                 continue
+            if rows == 0 and table in self.RECOLLECT_BACKED_TABLES and self._recollect_pending(date):
+                # P2-c: 本表有后置补采轮 (16:40), 而本审计 16:22 跑 —
+                # 此刻无行既不能断言断供也不能断言履约。显式记 pending 态,
+                # 由 _write_row 落 status='delayed_by_recollect' (非 missing),
+                # 不当日告警; 真断供由补采轮自身成败与次日审计显形。
+                #
+                # **边界**: 仅当「审计时点早于补采轮计划时点」才 pending。
+                # 16:40 之后 (或回看历史日) 再查 → 仍走原 missing 判,
+                # 保证「交易日 0 行必须显形」不被洗成假绿。
+                result[table] = {"fresh": None, "rows": 0,
+                                 "pending_recollect": self.RECOLLECT_BACKED_TABLES[table]}
+                continue
             result[table] = {"fresh": rows > 0, "rows": rows}
         prev = self._prev_trading_day(conn, date)
         for table, date_col in self.T1_COLLECT_TABLES.items():
@@ -137,6 +182,27 @@ class DataReadiness:
                 rows = 0
             result[table] = {"fresh": rows > 0, "rows": rows}
         return result
+
+    @staticmethod
+    def _recollect_pending(date: str) -> bool:
+        """P2-c: 审计时点是否早于补采轮计划时点 (仅「当日」适用)。
+
+        - 审计的是**历史日**(date < today) → 补采轮早已跑过 → 不 pending,
+          真缺数如实判 missing (回看历史/次日复核不被洗成假绿);
+        - 审计的是**今日**且当前时刻 < RECOLLECT_WINDOW_START → pending;
+        - 审计的是今日且补采窗已过 → 不 pending, 照常判 missing。
+        任何异常 → False (保守判 missing, 哨兵不哑)。
+        """
+        try:
+            from datetime import datetime as _dt
+            from common.utils import bj_date
+            today = bj_date()
+            if str(date)[:10] != str(today)[:10]:
+                return False  # 历史日: 补采轮已跑完, 不给 pending 豁免
+            hhmm = _dt.now().strftime("%H:%M")
+            return hhmm < DataReadiness.RECOLLECT_WINDOW_START
+        except Exception:
+            return False
 
     @staticmethod
     def _is_holiday(date: str) -> bool:
