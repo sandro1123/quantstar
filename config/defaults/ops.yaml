@@ -209,7 +209,11 @@ ops:
     # 窗: DDP 实测 15:30→15:44 (~14min) 后 46min 隔离; 16:20/16:22
     # DL-33 双门禁之后 (不扰门禁首轮读数)。
     shortterm_recollect:
-      schedule: "16:30"
+      # 时点与生产实际 crontab 对齐 (2026-11-11): 原写 16:30, 但生产实际为
+      # 16:40 — 因为 16:30 已被 daily_backtest 占用。两处不一致是真实漂移,
+      # 会被 OPS-05 schedule_check 报 missing (config 声明 vs crontab 实际)。
+      # 改 yaml 侧对齐 crontab (crontab 是运行时权威)。
+      schedule: "16:40"
       days: "1-5"
       depends_on: []
       timeout_s: 600
