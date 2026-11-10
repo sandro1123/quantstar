@@ -58,10 +58,11 @@
 # 16:22 数据新鲜度审计 (DL-33, depends_on daily_data_pipeline)
 22 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh freshness_audit scripts/cron_watchdog.sh freshness_audit /home/app/quantstar/.venv/bin/python -m src pipeline run freshness_audit >> /home/app/quantstar/logs/pipeline.log 2>&1
 
-# 16:30 短线补采轮 (刀2, fix/anomaly-1630-recollect) — 快照六项 16:30 补采,
-# 治「源在但漏」永久缺口 (DL-07 不可回填). 窗口: DDP 15:30→15:44 后 46min 隔离,
-# DL-33 双门禁之后 (不扰门禁首轮读数).
-30 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh shortterm_recollect scripts/cron_watchdog.sh shortterm_recollect /home/app/quantstar/.venv/bin/python -m src pipeline run shortterm_recollect >> /home/app/quantstar/logs/pipeline.log 2>&1
+# 16:40 短线补采轮 (刀2, fix/anomaly-1630-recollect) — 快照六项补采,
+# 治「源在但漏」永久缺口 (DL-07 不可回填). 窗口: DDP 15:30→15:44 后隔离,
+# DL-33 双门禁 (16:20/16:22) 之后 (不扰门禁首轮读数).
+# 注: 生产实际时点为 16:40 (16:30 已被 daily_backtest 占用) — 本行与生产对齐。
+40 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh shortterm_recollect scripts/cron_watchdog.sh shortterm_recollect /home/app/quantstar/.venv/bin/python -m src pipeline run shortterm_recollect >> /home/app/quantstar/logs/pipeline.log 2>&1
 
 # 16:30 每日回测
 30 16 * * 1-5 cd /home/app/quantstar && PYTHONPATH=src CONFIG_ENV=prod scripts/flock_guard.sh daily_backtest scripts/cron_watchdog.sh daily_backtest /home/app/quantstar/.venv/bin/python -m src pipeline run daily_backtest >> /home/app/quantstar/logs/pipeline.log 2>&1
