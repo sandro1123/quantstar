@@ -29,6 +29,24 @@ class WalkForwardConfig:
     min_window_days: int = 60
     anchored: bool = False
     is_ratio: float = 0.7
+    # ── #5 防泄漏 (Issue #5) ────────────────────────────────────────────
+    # purge_days: 训练段末尾裁掉的天数。理由: 标签是「未来 N 日收益」,
+    #   训练段最后 N 天的标签实际用到了测试段的价格 —— 不裁 = 标签重叠泄漏。
+    #   取 0 表示关闭 (向后兼容旧行为), 但**关闭时会在 wf_result 里留痕**,
+    #   不让「忘了配」伪装成「配了 0」。
+    purge_days: int = 0
+    # embargo_days: 在 purge 之外, 再在测试段开头留出的隔离带。理由: 即使
+    #   标签不重叠, 相邻交易日的特征高度自相关 (动量/波动率), 边界样本仍会
+    #   给 OOS 成绩注水。embargo 从测试段开头吃掉, 该段不参与 OOS 统计。
+    embargo_days: int = 0
+
+    def __post_init__(self):
+        if self.purge_days < 0:
+            raise ValueError(f"purge_days 不能为负: {self.purge_days}")
+        if self.embargo_days < 0:
+            raise ValueError(f"embargo_days 不能为负: {self.embargo_days}")
+        if not (0.0 < self.is_ratio < 1.0):
+            raise ValueError(f"is_ratio 必须在 (0,1): {self.is_ratio}")
 
 
 class WalkForwardMode:
@@ -151,6 +169,19 @@ class WalkForwardMode:
             "anchored": self.config.anchored,
             "best_window": round(max(oos_returns), 4) if oos_returns else 0.0,
             "worst_window": round(min(oos_returns), 4) if oos_returns else 0.0,
+            # ── #5 防泄漏可追溯面 ──────────────────────────────────────
+            # 每窗口的 IS/OOS 实际区间已在 window_details 里 (裁切后),
+            # 这里记口径本身 + 泄漏风险标记。purge/embargo 任一为 0 时
+            # 打 leakage_risk 标记 —— 不让「忘了配」看起来像「配了 0」。
+            "purge_days": int(self.config.purge_days),
+            "embargo_days": int(self.config.embargo_days),
+            "leakage_risk": (int(self.config.purge_days) == 0),
+            "leakage_note": (
+                "purge_days=0: 训练段标签与测试段价格可能重叠 (前视泄漏)。"
+                "生产用 WFO 结论前须配 purge_days >= 标签 horizon 天数。"
+                if int(self.config.purge_days) == 0 else
+                f"purge_days={int(self.config.purge_days)}, "
+                f"embargo_days={int(self.config.embargo_days)} (已防泄漏)"),
         }
 
         return BacktestReport(
@@ -199,19 +230,45 @@ class WalkForwardMode:
         return rep
 
     def _split_is_oos(self, w_start: str, w_end: str) -> tuple[tuple[str, str] | None, tuple[str, str] | None]:
-        """按 is_ratio 把单个窗口切成 IS / OOS 两段。"""
+        """按 is_ratio 把单个窗口切成 IS / OOS 两段, 并施加 purge / embargo。
+
+        #5 (Issue #5) 防泄漏三件:
+          1. 基础切分: IS = 窗口前 is_ratio, OOS = 其余;
+          2. **purge**: IS 末尾裁掉 purge_days —— 标签是「未来 N 日收益」,
+             IS 最后 N 天的标签会用到 OOS 段的价格, 不裁就是标签重叠泄漏;
+          3. **embargo**: OOS 开头再吃掉 embargo_days —— 相邻日特征高度自相关,
+             边界样本仍会给 OOS 注水, 隔离带内的样本不计入统计。
+
+        返回 (is_range, oos_range);任一段被裁空 → 该段为 None (宁缺毋滥,
+        不拿空段去算指标)。
+        """
         ws_dt = datetime.strptime(w_start, "%Y-%m-%d")
         we_dt = datetime.strptime(w_end, "%Y-%m-%d")
         w_days = (we_dt - ws_dt).days
         if w_days < 2:
             return None, (w_start, w_end)
+
         is_days = max(1, int(w_days * self.config.is_ratio))
         if is_days >= w_days:
             is_days = w_days - 1
         is_end_dt = ws_dt + timedelta(days=is_days)
         oos_start_dt = is_end_dt + timedelta(days=1)
-        is_range = (w_start, is_end_dt.strftime("%Y-%m-%d"))
-        oos_range = (oos_start_dt.strftime("%Y-%m-%d"), w_end)
+        oos_end_dt = we_dt
+
+        # ① purge: IS 末尾裁掉 purge_days (裁后 IS 必须仍非空且有跨度)
+        purge = int(self.config.purge_days)
+        if purge > 0:
+            is_end_dt = is_end_dt - timedelta(days=purge)
+        # ② embargo: OOS 开头吃掉 embargo_days
+        embargo = int(self.config.embargo_days)
+        if embargo > 0:
+            oos_start_dt = oos_start_dt + timedelta(days=embargo)
+
+        is_range = ((w_start, is_end_dt.strftime("%Y-%m-%d"))
+                    if is_end_dt > ws_dt else None)
+        oos_range = ((oos_start_dt.strftime("%Y-%m-%d"),
+                      oos_end_dt.strftime("%Y-%m-%d"))
+                     if oos_start_dt < oos_end_dt else None)
         return is_range, oos_range
 
     @staticmethod

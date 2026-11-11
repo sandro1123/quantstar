@@ -20,11 +20,11 @@ from common.logging import get_logger
 
 logger = get_logger("agent.llm.quota")
 
-# 10router 接入: key 与 9router 共享同库 (config/defaults/llm.yaml key_source 先例)。
-# ⚠ 权威 = ops.yaml ops.agent.quota.source_path (ProviderManager 构造点直灌
-# configure); 本常量仅 config 缺省时的降级兜底, 改路径须改 ops.yaml, 此值
-# 须与 defaults 保持同步 — 严禁把这里当真源改 (默合假象判例 09-12)。
-_DEFAULT_SOURCE_PATH = os.path.expanduser("~/.10router/db/data.sqlite")
+# 权威 = ops.yaml ops.agent.quota.source_path (ProviderManager 构造点直灌
+# configure); 本常量仅 config 缺省时的降级兜底, 改路径须改 ops.yaml。
+# Issue #15: 开源默认不得含作者本机私有路径 —— 故降级兜底改为空 (未配置),
+# 由 _today_usage 显式判空并报 degraded (诚实三态, 不猜一个不存在的路径)。
+_DEFAULT_SOURCE_PATH = ""
 
 
 class QuotaManager:
@@ -112,9 +112,17 @@ class QuotaManager:
         if self._cache and time.time() - self._cache[0] < 60:
             return self._cache[1]
         path = self._source_path or _DEFAULT_SOURCE_PATH
+        if not path:
+            # Issue #15: 未配置配额真源 = 未启用该能力, 不是故障。
+            # 仍走 degraded 显式位 (铁律#12 不静默), 但文案说清是"未配置"。
+            self._degraded = True
+            self._degraded_reason = (
+                "配额真源未配置 (ops.agent.quota.source_path 为空) — "
+                "用量配额功能不可用, 其余功能不受影响")
+            raise LookupError(self._degraded_reason)
         if not os.path.exists(path):
             self._degraded = True
-            self._degraded_reason = "9router db 不存在: %s" % path
+            self._degraded_reason = "配额真源 db 不存在: %s" % path
             raise LookupError(self._degraded_reason)
         try:
             usage = self.fetch_usage_daily(

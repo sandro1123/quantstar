@@ -37,6 +37,11 @@ class SignalProvenanceRecord:
 
     绑定产出该信号时的全部决策上下文: 因子贡献 top-N、权重表版本、模型版本、
     regime、Agent 审核结论、composite/ml 分数。
+
+    Issue #13 决策可复现: 除模型版本号外, 额外留下 model_id 与
+    pickle_hash (模型文件字节的 sha256), 以便复核"恰是哪一版二进制模型
+    产出了该分数"。version 只是注册表条目名, pickle_hash 才是二进制
+    身份证 — 同 version 若重训生成不同 pkl, hash 会变, 从而可分辨。
     """
     code: str
     date: str
@@ -46,6 +51,8 @@ class SignalProvenanceRecord:
     ml_score: float = 0.0
     regime: str = ""
     model_version: str = ""
+    model_id: str = ""
+    pickle_hash: str = ""
     weights_hash: str = ""
     factor_contributions: dict[str, float] = field(default_factory=dict)  # top-N {factor: weight*score}
     agent_confidence: float | None = None
@@ -98,6 +105,8 @@ class ProvenanceTracker:
                 ml_score REAL DEFAULT 0,
                 regime TEXT DEFAULT '',
                 model_version TEXT DEFAULT '',
+                model_id TEXT DEFAULT '',
+                pickle_hash TEXT DEFAULT '',
                 weights_hash TEXT DEFAULT '',
                 factor_contributions TEXT DEFAULT '{}',
                 agent_confidence REAL,
@@ -112,6 +121,12 @@ class ProvenanceTracker:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(strategy_runs)").fetchall()}
         if "results_json" not in cols:
             conn.execute("ALTER TABLE strategy_runs ADD COLUMN results_json TEXT")
+        # Issue #13: 存量库的 signal_provenance 补齐 model_id / pickle_hash 列
+        sp_cols = {r[1] for r in conn.execute("PRAGMA table_info(signal_provenance)").fetchall()}
+        if "model_id" not in sp_cols:
+            conn.execute("ALTER TABLE signal_provenance ADD COLUMN model_id TEXT DEFAULT ''")
+        if "pickle_hash" not in sp_cols:
+            conn.execute("ALTER TABLE signal_provenance ADD COLUMN pickle_hash TEXT DEFAULT ''")
         conn.commit()
 
     @catch_quantstar_error(layer_name="strategy")
@@ -226,3 +241,22 @@ class ProvenanceTracker:
                 pass
             out.append(d)
         return out
+
+
+def compute_pickle_hash(model_path: str) -> str:
+    """计算模型二进制文件的 sha256 前 16 位 — Issue #13 决策可复现。
+
+    version 只是注册表条目名, 同 version 若被重训覆盖, pickle_hash 会变,
+    从而可分辨"到底是哪一版二进制模型产出了该分数"。文件不存在返回 ""。
+    """
+    import hashlib
+    if not model_path or not os.path.exists(model_path):
+        return ""
+    try:
+        h = hashlib.sha256()
+        with open(model_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()[:16]
+    except OSError:
+        return ""

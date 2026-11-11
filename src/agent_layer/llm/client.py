@@ -261,7 +261,10 @@ class LLMClient:
         value = ""
         try:
             import sqlite3
-            conn = sqlite3.connect(f"file:{ks['path']}?mode=ro", uri=True, timeout=5)
+            # P0: key_source path 必须展开 ~ (用户主目录)，否则 sqlite 把 "~" 当字面量
+            # 找不到 db → key 解析空字符串 → 该 provider 无 key → LLM 腿全挂。
+            db_path = os.path.expanduser(ks["path"])
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
             try:
                 row = conn.execute(ks["query"]).fetchone()
                 if row and row[0]:

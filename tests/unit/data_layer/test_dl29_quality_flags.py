@@ -99,6 +99,44 @@ class TestRules:
         assert "699999" in flags
         assert any(f["rule"] == "mad_outlier" for f in flags["699999"])
 
+    def test_mad_outlier_batch_default_when_no_hist(self):
+        # 不提供 hist_fn → 回退 batch 模式 (向后兼容), 不崩
+        recs = [_rec(code=f"6{i:05d}", change_pct=5.0 + i * 0.01) for i in range(20)]
+        recs.append(_rec(code="699999", change_pct=50.0))
+        flags = check_kline_batch(recs)
+        assert any(f["rule"] == "mad_outlier" for f in flags.get("699999", []))
+
+    # ── P2-a: 相对前20日中位数偏离 (relative_20d) ──
+    def test_mad_outlier_batch_default_when_no_hist(self):
+        """当天 change_pct 偏离自身前20日中位数超 15% → mad_outlier。"""
+        cfg = dict(DEFAULTS, mad_mode="relative_20d", mad_rel_threshold=15.0)
+        recs = [_rec(code="600001", change_pct=25.0)]  # 当天 25%
+        hist = [2.0, 2.5, 3.0, 2.2, 2.8] * 4  # 中位数 2.5, 偏离 22.5% > 15
+        flags = check_kline_batch(recs, cfg=cfg,
+                                  hist_fn=lambda code, date: list(hist))
+        assert "600001" in flags
+        assert any(f["rule"] == "mad_outlier" for f in flags["600001"])
+
+    def test_relative_20d_no_flag_when_consistent_with_history(self):
+        """自身历史已剧烈波动, 当天再波动不算异常 → 抗剧烈波动日误报。"""
+        cfg = dict(DEFAULTS, mad_mode="relative_20d", mad_rel_threshold=15.0)
+        recs = [_rec(code="600001", change_pct=20.0)]  # 当天 20%, 但历史也是 15-25%
+        hist = [15.0, 18.0, 22.0, 25.0, 17.0] * 4  # 中位数 20.0, 偏离 0
+        flags = check_kline_batch(recs, cfg=cfg,
+                                  hist_fn=lambda code, date: list(hist))
+        # 中位数 20.0, 偏离 0 → 不标记
+        assert not any(f["rule"] == "mad_outlier"
+                       for fl in flags.values() for f in fl)
+
+    def test_relative_20d_insufficient_history_skipped(self):
+        """历史不足(<3 点) → 诚实跳过, 不伪造, 不误报。"""
+        cfg = dict(DEFAULTS, mad_mode="relative_20d", mad_rel_threshold=15.0)
+        recs = [_rec(code="600001", change_pct=99.0)]
+        flags = check_kline_batch(recs, cfg=cfg,
+                                  hist_fn=lambda code, date: [2.0, 3.0])  # 仅 2 点
+        assert not any(f["rule"] == "mad_outlier"
+                       for fl in flags.values() for f in fl)
+
     def test_clean_batch_no_flags(self):
         # change_pct=5.0x 与 close/pre_close-1=5% 一致, 批内 MAD 范围内
         recs = [_rec(code=f"6{i:05d}", change_pct=5.0 + i * 0.01) for i in range(20)]

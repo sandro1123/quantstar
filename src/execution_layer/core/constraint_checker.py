@@ -2,6 +2,10 @@
 
 from dataclasses import dataclass
 
+from common.logging import get_logger
+
+logger = get_logger("execution.constraint_checker")
+
 
 def calculate_fees(price: float, quantity: int, is_buy: bool = True) -> dict:
     """Calculate A-share transaction fees"""
@@ -79,17 +83,48 @@ class ConstraintChecker:
         if len(active) >= self.max_positions:
             violations.append(f"持仓数量已达上限{self.max_positions}只")
 
-        # 5. Max single position
+        # 5. Max single position (Issue #11)
+        #
+        # 病: 旧实现把**全组合已投市值 + 本笔**除以初始资金, 再跟"单只上限"
+        # 比 —— 那是「组合总仓位」口径, 与「单只仓位上限」不是一回事。
+        # 后果: 持仓一多, 任何新买入都会被判超限 (10 只各 10% = 100% > 20%
+        # 单只上限); 反之持仓为空时又永远不拦。判据与语义错配。
+        #
+        # 药: 单只口径 = **本笔金额 / 组合总权益**, 与上限直接比。
+        # 组合总权益 = 初始本金 + 已实现+浮动盈亏; 拿不到盈利曲线时回落
+        # 初始本金 (保守下界, 分母偏小 → 判定偏严, 不会放过超限)。
         new_position_value = current_price * position_qty
-        total_invested = sum(
-            (p.get("entry_price", 0) or 0) * (p.get("position_qty", 0) or 0)
-            for p in active
-        )
-        current_pct = (total_invested + new_position_value) / self.initial_capital * 100
-        if current_pct > self.max_single_stock_pct:
-            violations.append(f"单只仓位上限{self.max_single_stock_pct:.0f}%，当前: {current_pct:.1f}%")
+        total_equity = self._get_total_equity()
+        if total_equity > 0:
+            single_pct = new_position_value / total_equity * 100
+            if single_pct > self.max_single_stock_pct:
+                violations.append(
+                    f"单只仓位上限{self.max_single_stock_pct:.0f}%，"
+                    f"本笔将占 {single_pct:.1f}% (本笔{new_position_value:.0f}元 / "
+                    f"总权益{total_equity:.0f}元)")
 
         return ConstraintResult(passed=len(violations) == 0, violations=violations)
+
+    def _get_total_equity(self) -> float:
+        """组合总权益 = 可用现金 + 持仓市值; 不可得时回落初始本金。
+
+        Issue #11 口径: 单只仓位上限的分母必须是**总权益**, 不是可用资金
+        (否则卖光现金后可以无限加仓), 也不是已投市值 (那样分母随建仓漂移)。
+        """
+        try:
+            cash = self._get_available_cash()
+            active = self.stock_pool.get_by_status("active")
+            held = sum(
+                (p.get("last_price") or p.get("entry_price") or 0)
+                * (p.get("position_qty", 0) or 0)
+                for p in active
+            )
+            equity = float(cash) + float(held)
+            if equity > 0:
+                return equity
+        except Exception as e:  # noqa: BLE001 — 计算失败回落保守下界
+            logger.warning(f"total equity unavailable, falling back to initial: {e}")
+        return float(self.initial_capital)
 
     def check_exit(self, code: str) -> ConstraintResult:
         """Check exit constraints"""

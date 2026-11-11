@@ -8,7 +8,9 @@ data:
   quality:
     enabled: true
     change_pct_divergence: 1.0   # 百分点: change_pct 与 (close/pre_close-1)*100 背离阈值
-    mad_multiplier: 3.0          # 批内超 N 倍 MAD 判 outlier
+    mad_multiplier: 3.0          # 批内超 N 倍 MAD 判 outlier (mad_mode=batch 时用)
+    mad_mode: relative_20d       # P2-a: 相对前20日中位数偏离 (抗剧烈波动日误报)
+    mad_rel_threshold: 15.0      # 百分点: |change_pct - 前20日中位数| 超此值判 mad_outlier
     mad_field: "change_pct"
     zero_pct_batch_ratio: 0.5    # 批内 change_pct=0 占比超此值判整批清零异常 (07-29 模式)
 

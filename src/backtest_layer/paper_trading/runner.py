@@ -446,18 +446,22 @@ class PaperTradingRunner:
 
         只产出毕业/继续建议, 从不自动上实盘。跑未满 GRADUATION_MIN_DAYS 天 → 继续。
         paper_sharpe 读自执行层账本净值曲线 (不可算 → 继续)。
+
+        Issue #10: 毕业门禁天数按「交易日」而非自然日计数。
+        A 股每周约 5 交易日, 30 个交易日 ≈ 6 个自然周; 按自然日算会提前
+        ~40% 到达门禁, 过早放行纸盘。使用 TradingCalendar.trading_days_between
+        口径一致 (与回测窗口切分、日历计数共用 TradingCalendar)。
         """
-        from datetime import datetime
+        from common.calendar import TradingCalendar
         try:
-            start = datetime.strptime(paper_start_date, "%Y-%m-%d")
-            now = datetime.strptime(current_date, "%Y-%m-%d")
-            days = (now - start).days
+            days = TradingCalendar(db=self.db).trading_days_between(
+                paper_start_date, current_date)
         except (ValueError, TypeError):
             return {"decision": "continue", "reason": "invalid_dates"}
 
         if days < GRADUATION_MIN_DAYS:
             return {"decision": "continue",
-                    "reason": f"纸交易仅运行 {days} 天 < {GRADUATION_MIN_DAYS} 天",
+                    "reason": f"纸交易仅运行 {days} 交易日 < {GRADUATION_MIN_DAYS} 交易日",
                     "days": days}
         return self.evaluate_graduation(self.compute_paper_sharpe(), backtest_sharpe, days)
 

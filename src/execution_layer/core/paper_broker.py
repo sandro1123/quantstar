@@ -123,15 +123,35 @@ class PaperBroker:
 
             now = bj_now()[:19]
             conn = self.db.get_connection()
-            conn.execute("""
-                UPDATE stock_pool SET
-                    status = 'active', entry_price = ?, entry_date = ?,
-                    position_qty = ?, last_price = ?, last_price_date = ?,
-                    current_score = COALESCE(current_score, initial_score),
-                    updated_at = ?
-                WHERE code = ?
-            """, (entry_price, bj_date(), qty, entry_price, bj_date(), now, code))
-            conn.commit()
+            # Issue #11: entry 必须带**状态谓词 + rowcount 检查**, 对齐 exit 路径。
+            #
+            # 病: 旧实现 `WHERE code = ?` 无谓词 —— 上面的 pool.get("status")
+            # 读的是**读时快照**, 到写时状态可能已被别的路径改掉 (并发/重入)。
+            # 结果是已 active 的票被二次 entry: 覆盖 entry_price、再次扣款、
+            # action_records 多写一条 —— 重复成交且账实不符。
+            #
+            # 药: 把「只有 pending_entry 才能转 active」写进 WHERE, 由 SQLite
+            # 的行锁 + 影响行数保证原子性; rowcount != 1 即视为状态已被抢改,
+            # 返回 invalid_status 而不是静默覆盖。
+            with conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE stock_pool SET
+                        status = 'active', entry_price = ?, entry_date = ?,
+                        position_qty = ?, last_price = ?, last_price_date = ?,
+                        current_score = COALESCE(current_score, initial_score),
+                        updated_at = ?
+                    WHERE code = ? AND status = 'pending_entry'
+                    """,
+                    (entry_price, bj_date(), qty, entry_price, bj_date(), now, code))
+                if cursor.rowcount != 1:
+                    logger.warning(
+                        f"Paper entry aborted for {code}: state changed under us "
+                        f"(rowcount={cursor.rowcount}, expected 1 — "
+                        f"likely already active or exited)")
+                    return PaperTradeResult(
+                        success=False, code=code, side="entry", price=entry_price,
+                        qty=qty, reason="invalid_status")
 
             self.action_record.write(code, "entry", reason, "execution",
                 price=entry_price, new_value=total_deduct,

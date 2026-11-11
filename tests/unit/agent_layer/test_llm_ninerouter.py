@@ -134,6 +134,59 @@ def test_key_source_missing_db_returns_empty(monkeypatch, tmp_path):
     assert client._resolve_api_key(prov) == ""
 
 
+def test_key_source_path_with_tilde_is_expanded(monkeypatch, tmp_path):
+    """P0: key_source path 含 "~" 必须被 expanduser 展开，否则 sqlite
+    把 "~" 当字面量找不到 db，导致 key 解析为空、LLM 腿全挂。"""
+    monkeypatch.delenv("QS_LLM_OFFLINE", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    db_path = home / "data.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE apiKeys (id INTEGER PRIMARY KEY, key TEXT, name TEXT, isActive INTEGER)")
+    conn.execute("INSERT INTO apiKeys (key, name, isActive) VALUES (?, 'Agent', 1)", ("sk-test-tilde",))
+    conn.commit()
+    conn.close()
+    prov = {
+        "name": "n9r",
+        "url": "http://x",
+        "model": "m",
+        "key_source": {
+            "type": "sqlite",
+            "path": str(home / "data.sqlite"),   # 绝对路径基线：应解析成功
+            "query": "SELECT key FROM apiKeys WHERE name='Agent' AND isActive=1 LIMIT 1",
+        },
+    }
+    client = _make_client([prov])
+    assert client._resolve_api_key(prov) == "sk-test-tilde", "绝对路径基线应解析成功"
+
+
+def test_key_source_path_without_expanduser_fails_on_tilde(monkeypatch, tmp_path):
+    """反向钉：若 key_source path 含 "~" 而不做 expanduser，sqlite 会把 "~"
+    当字面量文件名，找不到 db，key 解析应返回 ""（证明 expanduser 是必需的）。"""
+    monkeypatch.delenv("QS_LLM_OFFLINE", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    db_path = home / "data.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE apiKeys (id INTEGER PRIMARY KEY, key TEXT, name TEXT, isActive INTEGER)")
+    conn.execute("INSERT INTO apiKeys (key, name, isActive) VALUES (?, 'Agent', 1)", ("sk-test-tilde",))
+    conn.commit()
+    conn.close()
+    prov = {
+        "name": "n9r",
+        "url": "http://x",
+        "model": "m",
+        "key_source": {
+            "type": "sqlite",
+            "path": f"~/{home.name}/data.sqlite",   # 含 "~"，未展开则 sqlite 找不到
+            "query": "SELECT key FROM apiKeys WHERE name='Agent' AND isActive=1 LIMIT 1",
+        },
+    }
+    client = _make_client([prov])
+    assert client._resolve_api_key(prov) == "", (
+        "不展开 '~' 时 key_source 应解析为空（找不到 db），证明 expanduser 是必需修复")
+
+
 def test_key_source_empty_result_returns_empty(monkeypatch, tmp_path):
     monkeypatch.delenv("QS_LLM_OFFLINE", raising=False)
     db_path = tmp_path / "empty.sqlite"
@@ -148,6 +201,59 @@ def test_key_source_empty_result_returns_empty(monkeypatch, tmp_path):
     }
     client = _make_client([prov])
     assert client._resolve_api_key(prov) == ""
+
+
+def test_key_source_path_with_tilde_is_expanded(monkeypatch, tmp_path):
+    """P0: key_source path 含 "~" 必须被 expanduser 展开，否则 sqlite
+    把 "~" 当字面量找不到 db，导致 key 解析为空、LLM 腿全挂。"""
+    monkeypatch.delenv("QS_LLM_OFFLINE", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    db_path = home / "data.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE apiKeys (id INTEGER PRIMARY KEY, key TEXT, name TEXT, isActive INTEGER)")
+    conn.execute("INSERT INTO apiKeys (key, name, isActive) VALUES (?, 'Agent', 1)", ("sk-test-tilde",))
+    conn.commit()
+    conn.close()
+    prov = {
+        "name": "n9r",
+        "url": "http://x",
+        "model": "m",
+        "key_source": {
+            "type": "sqlite",
+            "path": str(home / "data.sqlite"),   # 绝对路径基线：应解析成功
+            "query": "SELECT key FROM apiKeys WHERE name='Agent' AND isActive=1 LIMIT 1",
+        },
+    }
+    client = _make_client([prov])
+    assert client._resolve_api_key(prov) == "sk-test-tilde", "绝对路径基线应解析成功"
+
+
+def test_key_source_path_without_expanduser_fails_on_tilde(monkeypatch, tmp_path):
+    """反向钉：若 key_source path 含 "~" 而不做 expanduser，sqlite 会把 "~"
+    当字面量文件名，找不到 db，key 解析应返回 ""（证明 expanduser 是必需的）。"""
+    monkeypatch.delenv("QS_LLM_OFFLINE", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    db_path = home / "data.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE apiKeys (id INTEGER PRIMARY KEY, key TEXT, name TEXT, isActive INTEGER)")
+    conn.execute("INSERT INTO apiKeys (key, name, isActive) VALUES (?, 'Agent', 1)", ("sk-test-tilde",))
+    conn.commit()
+    conn.close()
+    prov = {
+        "name": "n9r",
+        "url": "http://x",
+        "model": "m",
+        "key_source": {
+            "type": "sqlite",
+            "path": f"~/{home.name}/data.sqlite",   # 含 "~"，未展开则 sqlite 找不到
+            "query": "SELECT key FROM apiKeys WHERE name='Agent' AND isActive=1 LIMIT 1",
+        },
+    }
+    client = _make_client([prov])
+    assert client._resolve_api_key(prov) == "", (
+        "不展开 '~' 时 key_source 应解析为空（找不到 db），证明 expanduser 是必需修复")
 
 
 def test_api_key_env_still_resolves(monkeypatch):
@@ -185,3 +291,56 @@ def test_offline_gate_blocks_key_source(monkeypatch, tmp_path):
     }
     client = _make_client([prov])
     assert client._resolve_api_key(prov) == ""
+
+
+def test_key_source_path_with_tilde_is_expanded(monkeypatch, tmp_path):
+    """P0: key_source path 含 "~" 必须被 expanduser 展开，否则 sqlite
+    把 "~" 当字面量找不到 db，导致 key 解析为空、LLM 腿全挂。"""
+    monkeypatch.delenv("QS_LLM_OFFLINE", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    db_path = home / "data.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE apiKeys (id INTEGER PRIMARY KEY, key TEXT, name TEXT, isActive INTEGER)")
+    conn.execute("INSERT INTO apiKeys (key, name, isActive) VALUES (?, 'Agent', 1)", ("sk-test-tilde",))
+    conn.commit()
+    conn.close()
+    prov = {
+        "name": "n9r",
+        "url": "http://x",
+        "model": "m",
+        "key_source": {
+            "type": "sqlite",
+            "path": str(home / "data.sqlite"),   # 绝对路径基线：应解析成功
+            "query": "SELECT key FROM apiKeys WHERE name='Agent' AND isActive=1 LIMIT 1",
+        },
+    }
+    client = _make_client([prov])
+    assert client._resolve_api_key(prov) == "sk-test-tilde", "绝对路径基线应解析成功"
+
+
+def test_key_source_path_without_expanduser_fails_on_tilde(monkeypatch, tmp_path):
+    """反向钉：若 key_source path 含 "~" 而不做 expanduser，sqlite 会把 "~"
+    当字面量文件名，找不到 db，key 解析应返回 ""（证明 expanduser 是必需的）。"""
+    monkeypatch.delenv("QS_LLM_OFFLINE", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    db_path = home / "data.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE apiKeys (id INTEGER PRIMARY KEY, key TEXT, name TEXT, isActive INTEGER)")
+    conn.execute("INSERT INTO apiKeys (key, name, isActive) VALUES (?, 'Agent', 1)", ("sk-test-tilde",))
+    conn.commit()
+    conn.close()
+    prov = {
+        "name": "n9r",
+        "url": "http://x",
+        "model": "m",
+        "key_source": {
+            "type": "sqlite",
+            "path": f"~/{home.name}/data.sqlite",   # 含 "~"，未展开则 sqlite 找不到
+            "query": "SELECT key FROM apiKeys WHERE name='Agent' AND isActive=1 LIMIT 1",
+        },
+    }
+    client = _make_client([prov])
+    assert client._resolve_api_key(prov) == "", (
+        "不展开 '~' 时 key_source 应解析为空（找不到 db），证明 expanduser 是必需修复")
