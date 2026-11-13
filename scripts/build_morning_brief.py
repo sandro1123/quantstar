@@ -328,21 +328,91 @@ def _get_stock_data(dry_run: bool = False):
             conn.close()
 
 
+# IC 负向因子集合 — 与 aggregator.py IC_NEGATIVE_FACTORS 同源 (对拍保证一致)。
+# 聚合器在 composite 前对这些因子取负 (raw -0.63 → adjusted +0.63 计为正贡献)；
+# 理由段若不翻号, 会把「实际加分的负向因子」说成「偏弱」—— 2026-11-12 实测
+# Top5 全被"cntd10偏弱"类文案占据, 方向说反 (第二三二环待修项②)。
+try:
+    from strategy_layer.aggregation.aggregator import IC_NEGATIVE_FACTORS as _IC_NEG
+except Exception:  # 防御: 理由段降级不影响主流程, 回退空集 (退回旧行为)
+    _IC_NEG = frozenset()
+
+# Qlib 因子名中文化 (第二三二环: cn_map 未覆盖现代 89 键, 显示英文缩写)
+QLIB_CN_MAP = {
+    "alpha_001": "价量因子α1", "alpha_002": "价量因子α2", "alpha_003": "价量因子α3",
+    "alpha_004": "量价冲击α4", "alpha_005": "动量α5", "alpha_006": "反转α6",
+    "alpha_007": "量价背离α7", "alpha_008": "量价共振α8", "alpha_009": "动量α9",
+    "alpha_010": "反转α10", "alpha_011": "量价因子α11", "alpha_012": "波动α12",
+    "alpha_013": "量价因子α13", "alpha_014": "动量α14", "alpha_015": "量价因子α15",
+    "alpha_016": "波动α16", "alpha_017": "量价因子α17", "alpha_018": "动量α18",
+    "alpha_019": "量价因子α19", "alpha_020": "反转α20", "alpha_48": "量价因子α48",
+    "bb_width": "布林带宽", "cntd5": "5日连跌数", "cntd10": "10日连跌数",
+    "cntd20": "20日连跌数", "cntp5": "5日连涨数", "cntp10": "10日连涨数",
+    "cntp20": "20日连涨数", "concept_count": "概念数", "concept_heat": "概念热度",
+    "cord5": "5日价量相关", "cord20": "20日价量相关", "corr5": "5日量价相关",
+    "corr10": "10日量价相关", "klen": "K线实体", "klow": "下影线", "klow2": "下影线2",
+    "kmid": "实体占比", "kmid2": "实体占比2", "ksft": "上影偏移", "ksft2": "上影偏移2",
+    "kup": "上影线", "kup2": "上影线2", "liquidity_illiquid": "非流动性",
+    "lhb_net_buy": "龙虎榜净买", "ma5_dev": "5日均线乖离", "ma10_dev": "10日均线乖离",
+    "macd_hist": "MACD柱", "market_emotion_proxy": "市场情绪代理",
+    "market_sentiment": "市场情绪", "max5": "5日最高", "min5": "5日最低",
+    "momentum_5d_reversal": "5日反转", "moneyflow_main_net": "主力净流入",
+    "overnight_gap": "隔夜跳空", "pattern_technical": "技术形态",
+    "rank5": "5日分位", "rank10": "10日分位", "roc5": "5日变动率", "roc10": "10日变动率",
+    "roc20": "20日变动率", "roc60": "60日变动率", "rsi14": "RSI(14)",
+    "seasonality_same_month": "同月季节性", "std5": "5日波动", "std10": "10日波动",
+    "std20": "20日波动", "sumd5": "5日跌量", "sumd10": "10日跌量", "sumd20": "20日跌量",
+    "sump5": "5日涨量", "sump10": "10日涨量", "sump20": "20日涨量",
+    "turnover_ratio": "换手率", "vma5": "5日均量", "vma10": "10日均量", "vma20": "20日均量",
+    "vstd5": "5日量波动", "vstd10": "10日量波动", "analyst_consensus": "分析师共识",
+    "industry_momentum": "行业动量", "leverage_low": "低杠杆",
+}
+CN_MAP = {
+    "momentum_20d": "20日涨幅", "value_discount": "估值", "roe_quality": "ROE",
+    "growth_combined": "成长性", "moneyflow_net": "资金流入", "rsi_14": "RSI",
+    "avg_turnover_rate": "换手率", "market_sentiment": "市场情绪",
+    "earnings_stability": "盈利稳定", "asset_turnover": "资产周转",
+    "dividend_yield": "股息", "size_small_cap": "小市值", "volatility_reversal": "波动率",
+    **QLIB_CN_MAP,
+}
+
+
 def _template_stock_reason(d, scores):
+    """选股理由 = 按「权重 × 方向调整后分数」取真实贡献前 3 (与 composite 同源)。
+
+    口径: adjusted = raw if 因子不在 IC_NEGATIVE_FACTORS else -raw;
+          贡献 = weights[factor] × adjusted。只显示贡献 >0 的因子为「偏强」,
+          <0 为「偏弱」—— 与聚合器对 composite 的实际计算一致 (第二三二环修)。
+    """
+    import sqlite3 as _sq
+    from pathlib import Path as _P
+    from common.database import Database as _DB
     name = d["name"]; code = d["code"]; industry = d["industry"]; composite = d["composite"]
-    top = sorted([(k, v) for k, v in scores.items() if abs(v) > 0.05], key=lambda x: abs(x[1]), reverse=True)[:3]
-    cn_map = {"momentum_20d": "20日涨幅", "value_discount": "估值", "roe_quality": "ROE",
-              "growth_combined": "成长性", "moneyflow_net": "资金流入", "rsi_14": "RSI",
-              "avg_turnover_rate": "换手率", "market_sentiment": "市场情绪",
-              "earnings_stability": "盈利稳定", "asset_turnover": "资产周转",
-              "dividend_yield": "股息", "size_small_cap": "小市值", "volatility_reversal": "波动率"}
+    # 权重: 与策略层同源 (factor_weights 最新 weight_date); 取不到时回退等权
+    weights = None
+    try:
+        _c = _sq.connect(_P(_DB().db_path).resolve().as_uri() + "?mode=ro", uri=True)
+        _r = _c.execute("SELECT MAX(weight_date) FROM factor_weights").fetchone()
+        _wd = _r[0] if _r else None
+        if _wd:
+            weights = {k: v for k, v in _c.execute(
+                "SELECT factor_name, weight FROM factor_weights WHERE weight_date = ?", (_wd,))}
+        _c.close()
+    except Exception:
+        weights = None
+    adjusted = {k: (-v if k in _IC_NEG else v) for k, v in scores.items()}
+    if weights:
+        contrib = [(k, weights[k] * adjusted[k]) for k in adjusted
+                   if k in weights and abs(adjusted[k]) > 0.05]
+    else:  # 权重不可得: 退化为按调整后分数绝对值 (至少方向是对的)
+        contrib = [(k, adjusted[k]) for k in adjusted if abs(adjusted[k]) > 0.05]
+    contrib.sort(key=lambda x: abs(x[1]), reverse=True)
     reasons = []
-    for fname, fscore in top:
-        cn = cn_map.get(fname, fname)
-        if fscore > 0.3: reasons.append(f"{cn}偏强({fscore:+.2f})")
-        elif fscore > 0.1: reasons.append(f"{cn}偏多({fscore:+.2f})")
-        elif fscore < -0.3: reasons.append(f"{cn}偏弱({fscore:.2f})")
-    reasons_str = "；".join(reasons[:3]) if reasons else "综合评分较高"
+    for fname, cscore in contrib[:3]:
+        cn = CN_MAP.get(fname, fname)
+        if cscore > 0.05: reasons.append(f"{cn}贡献正({cscore:+.3f})")
+        elif cscore < -0.05: reasons.append(f"{cn}拖累({cscore:+.3f})")
+    reasons_str = "；".join(reasons) if reasons else "综合评分较高"
     return f"{name}({code}) — {industry}\n  综合评分: {composite:.3f}\n  因子: {reasons_str}"
 
 
@@ -355,9 +425,14 @@ def build_stock_picks(dry_run: bool = False):
     if llm and llm.is_available():
         items = []
         for d, scores in raw:
-            top = sorted([(k, v) for k, v in scores.items() if abs(v) > 0.05], key=lambda x: abs(x[1]), reverse=True)[:5]
-            factor_text = "；".join(f"{k}={v:+.2f}" for k, v in top)
-            items.append(f"{d['name']}({d['code']}) 行业{d['industry']} 评分{d['composite']:.3f} 因子:{factor_text}")
+            # 给 LLM 的因子文案与 composite 同源: 负向因子先翻号, 按调整后分数取前 5
+            adjusted = {k: (-v if k in _IC_NEG else v) for k, v in scores.items()}
+            top = sorted(
+                [(k, v) for k, v in adjusted.items() if abs(v) > 0.05],
+                key=lambda x: abs(x[1]), reverse=True,
+            )[:5]
+            factor_text = "；".join(f"{CN_MAP.get(k, k)}={v:+.2f}" for k, v in top)
+            items.append(f"{d['name']}({d['code']}) 行业{d['industry']} 评分{d['composite']:.3f} 因子(方向已调整):{factor_text}")
         prompt = (
             f"分析以下5只A股，对每只给出1-2句话分析理由+技术面判断+操作建议，用序号1-5开头:\n\n"
             + "\n".join(items)

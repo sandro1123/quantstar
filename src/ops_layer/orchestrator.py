@@ -3511,7 +3511,32 @@ class PipelineOrchestrator:
                 return np.array(X, dtype=np.float64), np.array(y, dtype=np.float64), dates, codes_out
 
             if has_factor_scores:
-                FEATURE_COLUMNS = _collect_factor_names(train_rows)
+                # 用全量样本的因子名并集作为特征空间：train 段落若处于旧特征时代，
+                # 只从 train_rows 收集会冻结出残缺模型（如历史 2 键/20 键塌陷，
+                # 见 2026-11-12 第二三一/二三二环判例）。预测侧用当日全量因子打分，
+                # 训练侧必须与之同维；缺失值由 build_dataset_factor_scores 填 0.0。
+                FEATURE_COLUMNS = _collect_factor_names(all_rows)
+                # 月度重训特征下限：factor_scores 正常态应有 ~89 键；低于下限说明
+                # 数据面尚未恢复（因子回填未完成/源层塌陷），此时训练出的模型会在
+                # 生产预测时维度错配或信息严重不足，必须拒绝而非产出劣化模型。
+                MIN_FACTOR_FEATURES = 30
+                if len(FEATURE_COLUMNS) < MIN_FACTOR_FEATURES:
+                    logger.warning(
+                        "Model retrain: factor feature count below floor "
+                        f"({len(FEATURE_COLUMNS)} < {MIN_FACTOR_FEATURES}); "
+                        "refusing to train on collapsed feature set"
+                    )
+                    return HandlerResult(
+                        success=False,
+                        errors=[
+                            f"factor feature count below floor: "
+                            f"{len(FEATURE_COLUMNS)} < {MIN_FACTOR_FEATURES}"
+                        ],
+                        metadata={
+                            "n_features": len(FEATURE_COLUMNS),
+                            "min_factor_features": MIN_FACTOR_FEATURES,
+                        },
+                    )
                 X_train, y_train, _, _ = build_dataset_factor_scores(train_rows, FEATURE_COLUMNS)
                 X_es, y_es, d_es, _ = build_dataset_factor_scores(es_rows, FEATURE_COLUMNS)
                 X_val, y_val, d_val, _ = build_dataset_factor_scores(val_rows, FEATURE_COLUMNS)
