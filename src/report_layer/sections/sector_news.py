@@ -34,11 +34,15 @@ class SectorNewsSection(Section):
                 note_degraded("sector_news", _deg_exc)
                 pass
             # 新闻: 只取有 code 关联的 (一条一动作格式)
+            # F-241 判例: 原写 `publish_time`，但 stock_news 表真实列是 `date`
+            # (news_collector.py:97 建表口径)，列名错配已致该段连续 10 个
+            # 交易日静默降级 (2026-11-02~11-13 实测，OperationalError 被
+            # except 吞掉后 note_degraded)。修法=对齐真实列名。
             try:
                 news = conn.execute(
                     "SELECT code, title FROM stock_news "
-                    "WHERE publish_time >= ? AND code IS NOT NULL AND code != '' "
-                    "ORDER BY publish_time DESC LIMIT 3",
+                    "WHERE date >= ? AND code IS NOT NULL AND code != '' "
+                    "ORDER BY date DESC LIMIT 3",
                     (context.date,)).fetchall()
                 for code, title in news:
                     lines.append(f"📰 {code}: {title} — 关注对明日开盘的传导")
