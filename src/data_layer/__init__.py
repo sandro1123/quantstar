@@ -982,6 +982,18 @@ class DataLayer:
         return checker.check_all()
 
     @catch_quantstar_error(layer_name="data")
+    @with_timeout(timeout_s=30)
+    def get_source_coverage(self) -> dict:
+        """源能力矩阵接线 (2026-11 对标 DSA 的「市场支持边界」表):
+
+        每个已声明数据类型的可用源/单点/降级/缺口, 判据见
+        data_layer.sources.coverage (宪法#5「单点必有对冲」的机器可读版)。
+        只做 is_available() 探测, 不发数据请求; CLI `qs data sources` 消费。
+        """
+        from data_layer.sources.coverage import coverage_report
+        return coverage_report(self._source_registry)
+
+    @catch_quantstar_error(layer_name="data")
     @with_timeout(timeout_s=60)
     def get_integrity_summary(self) -> dict:
         """DL-11: DataIntegrityChecker 接线 — 关键表行数/日期范围/异常汇总。

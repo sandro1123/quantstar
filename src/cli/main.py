@@ -711,6 +711,40 @@ def data_catalog(ctx, audit_date):
         click.echo(f"\n⚠️ 停滞表: {', '.join(cat['stale_tables'])}")
 
 
+@data.command("sources")
+@click.pass_context
+def data_sources(ctx):
+    """数据源能力矩阵 — 每个数据类型几条腿/单点/缺口 (宪法#5 机器可读版)"""
+    from data_layer import DataLayer
+
+    layer = DataLayer(db=_get_cli_db())
+    rep = layer.get_source_coverage()
+    if not isinstance(rep, dict) or "types" not in rep:
+        click.echo("❌ 源能力矩阵不可得 (源注册表未加载)")
+        return
+    if ctx.obj.get("json"):
+        click.echo(json.dumps(rep, ensure_ascii=False))
+        return
+    s = rep["summary"]
+    click.echo(f"🔌 数据源能力矩阵 (生成于 {rep.get('generated_at', '-')})")
+    click.echo(f"   类型 {rep['total_types']}: "
+               f"ok {s['ok']} / 单点 {s['single']} / 降级 {s['degraded']} / 缺口 {s['gap']}")
+    icon = {"ok": "✅", "single": "⚠️", "degraded": "🔻", "gap": "❌"}
+    click.echo("\n数据类型                    可用源                          状态")
+    for e in rep["types"]:
+        legs = ",".join(e["available"]) or "-"
+        click.echo(f"  {icon[e['status']]} {e['data_type']:22s} {legs:30s} "
+                   f"[{e['status']}] {e['label']}")
+    if rep["gaps"]:
+        click.echo(f"\n❌ 能力缺口 (无任何已注册源): {', '.join(rep['gaps'])}")
+    if rep["degraded"]:
+        click.echo(f"🔻 全源不可用 (凭证/熔断/网络): {', '.join(rep['degraded'])}")
+    if rep["singles"]:
+        click.echo(f"⚠️ 单点无对冲 (宪法#5 未满足): {', '.join(rep['singles'])}")
+    if rep["unhealthy_sources"]:
+        click.echo(f"\n不健康源: {', '.join(rep['unhealthy_sources'])}")
+
+
 # advisory 投顾命令组 (只读, MVP P1) — 独立模块不膨胀 main.py
 from cli.advisory import advisory  # noqa: E402
 cli.add_command(advisory)
