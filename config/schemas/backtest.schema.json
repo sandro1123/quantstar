@@ -60,12 +60,36 @@
           "additionalProperties": true
         },
         "walk_forward": {
-          "type": [
-            "null",
-            "string",
-            "number",
-            "boolean"
-          ]
+          "type": "object",
+          "properties": {
+            "anchored": {
+              "type": "boolean"
+            },
+            "embargo_days": {
+              "type": "integer"
+            },
+            "is_ratio": {
+              "type": "number"
+            },
+            "min_window_days": {
+              "type": "integer"
+            },
+            "n_windows": {
+              "type": "integer"
+            },
+            "purge_days": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "anchored",
+            "embargo_days",
+            "is_ratio",
+            "min_window_days",
+            "n_windows",
+            "purge_days"
+          ],
+          "additionalProperties": true
         }
       },
       "required": [
