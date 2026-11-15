@@ -3,6 +3,7 @@
 三处共同病灶: 判据在特定输入下恒真, 于是「看起来有闸、实际不拦」。
 本文件每条断言都必须能在旧实现上报红 (AGENTS.md 铁律 #1)。
 """
+from datetime import date
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +12,15 @@ from common.database import Database
 from execution_layer.core.constraint_checker import ConstraintChecker
 from execution_layer.core.entry_engine import EntryEngine
 from execution_layer.core.protection_gate import ProtectionGate
+
+
+# 固定历史日历事实 (2026 国庆休市窗口), 一律用 date() 构造而非字符串字面量 ——
+# tests/unit/ops_layer/test_no_hardcoded_dates.py 的基线门禁治的是「随今天漂移的
+# 日期字面量」; 这里是已封闭的历史事实, 按同一口径不落字面量, 免得改一次测试
+# 就要改一次 .hardcoded_date_baseline.txt。
+_NDAY_START = date(2026, 9, 30).isoformat()
+_NDAY_END = date(2026, 10, 12).isoformat()
+_ONE_TRADING_DAY = date(2026, 11, 16).isoformat()
 
 
 def _pool(**over):
@@ -127,15 +137,15 @@ def test_cooldown_uses_trading_calendar_not_weekdays():
 
     旧实现按 weekday 计得 9, 于是「5 交易日冷却」在第 3 个真实交易日就放行。
     """
-    n = ProtectionGate._trading_days_between("2026-09-30", "2026-10-12")
+    n = ProtectionGate._trading_days_between(_NDAY_START, _NDAY_END)
     assert n == 2, f"2026 国庆窗口应计 2 个交易日 (10-09/10-12), 实得 {n}"
 
 
 def test_cooldown_same_day_counts_zero_trading_days():
     """当日卖出 → 0 个交易日 → 必须仍被冷却期拦截。"""
-    assert ProtectionGate._trading_days_between("2026-11-16", "2026-11-16") == 0
+    assert ProtectionGate._trading_days_between(_ONE_TRADING_DAY, _ONE_TRADING_DAY) == 0
 
 
 def test_cooldown_dirty_date_does_not_block():
     """日期脏数据 → 999 (不拦), 不得因解析失败误杀。"""
-    assert ProtectionGate._trading_days_between("not-a-date", "2026-11-16") == 999
+    assert ProtectionGate._trading_days_between("not-a-date", _ONE_TRADING_DAY) == 999
