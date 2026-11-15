@@ -57,8 +57,41 @@ class ConstraintChecker:
         )
         return self.initial_capital - total_invested
 
-    def check_entry(self, code: str, current_price: float, position_qty: int = 100) -> ConstraintResult:
-        """Check all entry constraints before executing buy"""
+    def plan_qty(self, current_price: float, lot: int = 100) -> int:
+        """AUD-02: 本笔计划规模 = min(可用现金, 单只仓位上限) 折整手。
+
+        入场约束必须校验「将要下的这一单」, 而不是最小一手:
+        旧实现由调用方缺省 position_qty=100, 于是「余额不足」比的是 100 股的钱、
+        「单只仓位上限 20%」算的是 100×price/总权益 (常见价位 0.3%~1.7%),
+        两道闸在生产链路上恒不触发 (审计 AUD-02, 2026-11)。
+
+        返回 0 = 买不起一手 (调用方必须拦截, 不得回落到 100 股冒充)。
+        """
+        lot = max(int(lot or 100), 1)
+        try:
+            price = float(current_price)
+        except (TypeError, ValueError):
+            return 0
+        if price <= 0:
+            return 0
+        try:
+            cash = float(self._get_available_cash())
+        except (TypeError, ValueError):
+            return 0
+        equity = float(self._get_total_equity())
+        cap_pct = float(self.max_single_stock_pct)
+        # 上限不可用 (<=0) 时只用现金约束, 不放大预算
+        budget = min(cash, equity * cap_pct / 100.0) if cap_pct > 0 else cash
+        if budget <= 0:
+            return 0
+        return int(budget // (price * lot)) * lot
+
+    def check_entry(self, code: str, current_price: float, position_qty: int) -> ConstraintResult:
+        """Check all entry constraints before executing buy
+
+        AUD-02: position_qty 无默认值 —— 缺省即 TypeError (宁红不默)。
+        调用方必须先经 plan_qty() 定出本笔股数再进来, 保证「校验规模 = 下单规模」。
+        """
         violations = []
 
         # 1. T+1 check: stock already bought today?

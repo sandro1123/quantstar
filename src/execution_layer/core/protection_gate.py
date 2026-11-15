@@ -135,20 +135,32 @@ class ProtectionGate:
 
     @staticmethod
     def _trading_days_between(start: str, end: str) -> int:
-        """start 之后到 end 的交易日数 (工作日口径, 节假日保守多算=保护方向安全)。"""
+        """(start, end] 区间的**交易日**数 (真实交易日历口径)。
+
+        AUD-05 (审计 2026-11): 旧实现按 `d.weekday() < 5` 数工作日, 注释写
+        「节假日保守多算=保护方向安全」—— 方向是反的。工作日数 >= 交易日数,
+        含假期的窗口里 5 个工作日只对应 3~4 个交易日, 于是冷却期**提前**解除
+        (欠保护)。改为复用 common.calendar.TradingCalendar (exit_engine layer4 同源)。
+
+        解析失败 → 999 (不拦): 冷却期不应因日期脏数据误杀, 与旧实现一致。
+        """
         from datetime import datetime, timedelta
+
         try:
-            d0 = datetime.strptime(start, "%Y-%m-%d")
-            d1 = datetime.strptime(end, "%Y-%m-%d")
+            datetime.strptime(start, "%Y-%m-%d")
+            datetime.strptime(end, "%Y-%m-%d")
         except (ValueError, TypeError):
-            return 999  # 解析失败=不拦 (保守放行, 冷却期不应因日期脏数据误杀)
-        n = 0
-        d = d0 + timedelta(days=1)
-        while d <= d1:
-            if d.weekday() < 5:
-                n += 1
-            d += timedelta(days=1)
-        return n
+            return 999
+        begin = (datetime.strptime(start, "%Y-%m-%d")
+                 + timedelta(days=1)).strftime("%Y-%m-%d")
+        if begin > end:
+            return 0
+        try:
+            from common.calendar import TradingCalendar
+            return TradingCalendar(db=None).trading_days_between(begin, end)
+        except Exception as e:  # noqa: BLE001 — 日历故障不得导致误杀
+            logger.warning(f"trading_days_between 日历不可用 ({start}→{end}): {e}")
+            return 999
 
     # -- 守卫②: 当日连损 (当日 N 次止损 → 当日停开新仓) ----------------------
 
