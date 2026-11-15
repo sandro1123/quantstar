@@ -56,11 +56,17 @@ def test_plan_qty_respects_single_position_cap():
     assert qty * 15.0 <= 300000.0 * 0.20 + 1e-6, "不得超过单只上限"
 
 
-def test_plan_qty_limited_by_available_cash():
-    """现金不足时以现金为约束 (而非上限)。"""
+def test_plan_qty_cap_binds_before_cash():
+    """单只上限先于现金生效: 现金 10 万时本笔只买到 20% 上限(2 万), 而非全部现金。
+
+    本夹具里 equity == cash (无持仓), 所以上限永远先绑住 —— 这也说明
+    「现金不足」这条腿在当前结构下只能由「买不起一手」触发 (见下一条)。
+    第一版我按 5000 现金断言 300 股, CI 报 0 == 300: 因为上限 20%×5000=1000
+    已经低于一手 1500。错的是断言, 不是实现。
+    """
     pool = _pool()
-    pool.get_available_cash.return_value = 5000.0
-    assert ConstraintChecker(pool).plan_qty(15.0) == 300   # 5000/15=333 → 300
+    pool.get_available_cash.return_value = 100000.0
+    assert ConstraintChecker(pool).plan_qty(15.0) == 1300   # 20000/15=1333 → 1300
 
 
 def test_plan_qty_zero_when_unaffordable():
@@ -85,7 +91,7 @@ def test_entry_decision_carries_planned_qty():
     engine = EntryEngine(Database(":memory:"), _pool(), agent_layer=None)
     decision = engine.check_entry("000001", 14.0, "09:35:00")
     assert decision is not None and decision.action == "buy"
-    assert decision.qty == 4000, f"应携带本笔股数 4000, 实得 {decision.qty}"
+    assert decision.qty == 4200, f"应携带本笔股数 4200, 实得 {decision.qty}"   # 60000//1400=42 手
 
 
 def test_constraint_blocks_when_planned_qty_exceeds_cap():
