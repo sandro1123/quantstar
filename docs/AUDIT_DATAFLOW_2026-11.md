@@ -28,6 +28,8 @@
 | AUD-14 | P1 | Top-N 截断发生在排序**之前**,依赖调用方预排序 | `selector.py:206` vs `:259` |
 | AUD-15 | P2 | L3.3 近期表现调整用 `score *= (1+boost)`,对负分反向 | `selector.py:247-252` |
 | AUD-16 | P0-CI | 配置 schema 落后于 yaml → 配置门禁长期红 | `config/schemas/backtest.schema.json:62` |
+| AUD-18 | **P0** | 回撤闸门「显式放行」的返回值是 truthy 字符串,`check()` 把它当拦截 —— 日志说放行,实际拦单 | `protection_gate.py:247-280` vs `:114-116` |
+| AUD-19 | P1-CI | 两份测试互相矛盾,不可能同时通过 —— 开源仓库的 CI 因此永远红 | `test_llm_10router_hy3.py` vs `test_llm_deprivatization.py` |
 
 ---
 
@@ -173,11 +175,62 @@ python scripts/gen_config_schemas.py && git diff --stat config/schemas/
 | 失败用例 | 我读到的根因 | 建议 |
 |---|---|---|
 | `test_no_hardcoded_dates`(2 条) | `.hardcoded_date_baseline.txt` 未收录新增文件;存量 4588 处 | 跑门禁自带的基线刷新流程,或按报错清单补录 |
-| `test_llm_10router_hy3`(2 条) | 断言主链是 `cbcn/hy3`,实际解析成 `gpt-4o-mini`;另一条 `KeyError: 'key_source'` | 配置与断言分叉,需定"谁是主链" |
+| `test_llm_10router_hy3`(3 条) | **与 `test_llm_deprivatization` 互相矛盾,见 AUD-19** —— 不是配置分叉,是两份测试在断言相反的事实 | 归位或删除旧的那份 |
 | `test_paper_broker` | `PaperTradeResult(reason='invalid_status')` | 夹具状态与 broker 的状态机前置不匹配 |
 | `test_paper_broker_entry_idempotency::test_missing_action_records_fails_closed` | 断言 fail-closed,`protection_gate.py:85-103` 对"表不存在"走 fail-open | **这是安全语义分歧,不是笔误**——见下 |
 
 最后一条需要单独说:`protection_gate` 里那段注释(EX-04b)解释得分很清楚——空库意味着"无历史=无可评估风险",fail-open 是为了不误杀测试。但测试断言的是 fail-closed。**两边的哲学都对,冲突在"表不存在"到底算不算风险未知**。这条只能由你裁定,我不改。
+
+---
+
+## 4b. 新增两条(AUD-18 / AUD-19)
+
+### AUD-18 回撤闸门「显式放行」在 `check()` 里是拦截(P0)
+
+**证据链**(三处代码互相对照,不是推测):
+
+1. `protection_gate.py:246-280` —— `_check_drawdown` 在 `dd is None or peak_unavailable` 时进入「无法判定」分支。该分支在两种情形下给出**非空字符串**:
+   - NAV 末端陈旧 > 5 自然日 → `守卫读数陈旧 (...) → 显式放行`;
+   - 无活跃持仓但有待卖单 → `无 活 跃 持 仓 显式放行 (判 例 包E)`。
+   然后落一条 `guard_stale` 留痕,并 `return reason`。
+2. `protection_gate.py:114-116` —— `check()` 对每个守卫的返回值只做 `if reason:`,**任何非空字符串都 `return False, reason`**,即拦截入场。
+3. `protection_gate.py:247` 的注释原文:`显式放行 (truthy reason = block)` —— 作者**知道** truthy 即 block,但标签仍叫"放行"。
+
+**结论**:这两个分支的实际效果是**拦截入场**,而留痕(`guard_stale`)、日志、告警文案里写的都是「显式放行」。运维翻账本看到的是"系统已放行",实际单子被拦着。
+
+**这不是理论路径,有一个确定会触发的场景**:`_stale_nav_reason` 的阈值是 5 个**自然日**(`:365`),而 A 股长假远超 5 天。以仓库自己的日历(`common/calendar.py`)为例:
+
+- 国庆 2026:10-01 ~ 10-08 休市,最后交易日 09-30,首个交易日 10-09 —— 间隔 **9 天**;
+- 春节 2027:02-11 ~ 02-17 休市,最后交易日 02-10,首个交易日 02-18 —— 间隔 **8 天**。
+
+长假后首个交易日的盘中,`last_price_date` 还停在假前最后一天(日终盯市要到收盘后才更新),于是 `_curve_stale_days() > 5` → 触发「陈旧」分支 → 整个交易日**入场被拦**,而日志说"显式放行"。*(推断:我没有生产日志佐证它是否真的发生过;但代码路径与日历数字都是可核对的。)*
+
+**为什么现有测试抓不到**:`test_pack_b_stale_nav.py:67` 与 `test_pack_b_production_link.py:52` 断言的是 `_check_drawdown` / `_stale_nav_reason` 的**返回字符串里含"显式放行"** —— 它们钉住的恰好是那句有歧义的文案。我读到的测试里没有一条经过 `check()` 去断言 `can_trade` 的实际取值。又是"断言只看文案、不看效果"。
+
+**修法(需你定语义,我没改)**:二选一,现在是两边都不是:
+
+- 想要**放行**:这两个分支 `return ""`,把"显式放行"的可见性交给 `guard_stale` 留痕(已经在写)—— 这与注释里"放行 (reason="" 走 paused 逻辑)"的意图一致;
+- 想要**拦截**:文案改成「读数陈旧,拦截入场」,并把阈值从"自然日"改成"交易日"(否则每个长假都会误拦一整天)。
+
+无论选哪个,都应补一条经过 `check()` 的断言:`can_trade` 的真假必须与留痕文案一致(并按 AGENTS.md 加变异验证)。
+
+### AUD-19 两份测试互相矛盾,开源 CI 不可能转绿(P1)
+
+`tests/unit/config_layer/test_llm_deprivatization.py`(Issue #15)断言:
+
+- `config/defaults/*.yaml` **不得**出现 `\.10router`、`Hermes-Agent`(`:24-28`);
+- `llm.yaml` 的 provider **不得**有 `key_source`(`:57`)。
+
+`tests/unit/agent_layer/test_llm_10router_hy3.py`(2026-10-21 作者私有网关切换时写)断言的恰好相反:
+
+- 每条腿必须 `key_source`,路径含 `.10router/db/data.sqlite`(`:47-52`);
+- query 必须含 `Hermes-Agent`;主链必须是 `cbcn/hy3`。
+
+`config/defaults/llm.yaml` 现在是 Issue #15 之后的脱敏版(`api.openai.com` / `gpt-4o-mini` / `api_key_env`),所以**后者必红、前者必绿**。两份测试断言的是互斥事实,无论 `llm.yaml` 怎么改,总有一份红 —— **CI 的 `test` job 因此在开源仓库里结构性不可能全绿**。
+
+后果比"红灯"更严重:门禁长期红,人就学会忽略它;而 PR #20(纯文档)也红,正是这个原因 —— 没有信号能力的门禁,放过了 AUD-01。
+
+**修法**:`test_llm_10router_hy3.py` 属于私有部署校验,应搬到 `config/local.yaml` 的校验(或在缺少私有网关时 `skip`),不应在开源默认配置上断言。
 
 ---
 
