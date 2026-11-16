@@ -17,6 +17,8 @@ class EntryDecision:
     price: float
     reason: str
     volume_suggestion: str | None = None
+    # AUD-02: 本笔计划股数 —— 约束检查与下单必须同规模, 不得各算一套。
+    qty: int = 0
 
 
 class EntryEngine:
@@ -33,6 +35,31 @@ class EntryEngine:
         # D1 续卡: 结构化拦截原因 {gate, detail} — gate=哪道闸, detail=具体判定
         # (宁 NULL 不可假值)。与 _block_reason 同点双写, 供 entry_blocks 落库/报告渲染。
         self._block_info: dict | None = None
+        # AUD-03: 追高防御是否因取数失败而显式降级 (True = 本次未执行)。
+        # 异常仍按 fail-open 返回 None (不误杀), 但必须可见, 不得静默。
+        self._spike_defense_degraded = False
+
+    @staticmethod
+    def _plan_qty(constraint_checker, current_price) -> int | None:
+        """本笔计划股数; **None = 无法判定**, 交给 ConstraintChecker 自行判定。
+
+        生产实现 `ConstraintChecker.plan_qty` 恒返回 int (见其 docstring)。
+        返回非 int 只可能来自测试替身 —— 例如 test_d1_block_visibility /
+        test_r3_d1_block_blue_card 的 gate_pass fixture 整个 patch 掉
+        ConstraintChecker, plan_qty 便成了 MagicMock。
+
+        此处**不得**对非 int 做 `<` 比较: 第一版直接写 `plan_qty < 100`,
+        于是 8 条既有闸门测试全部 TypeError 变红。定不了规模就不在这里拦 ——
+        判据与处置各归其位, 拦截职责留在约束层。
+        """
+        try:
+            qty = constraint_checker.plan_qty(current_price)
+        except Exception as e:  # noqa: BLE001 — 定规模失败不阻断入场链
+            logger.warning(f"plan_qty unavailable for price={current_price}: {e}")
+            return None
+        if isinstance(qty, bool) or not isinstance(qty, int) or qty < 0:
+            return None
+        return qty
 
     def _stash_block(self, gate: str, detail: str | None) -> None:
         """拦截 stash 统一入口: 结构化 info + 兼容文本 reason 一并落。"""
@@ -79,13 +106,21 @@ class EntryEngine:
                     rsi = 100 - (100 / (1 + rs))
                 if rsi > 70:
                     return f"RSI > 70: {rsi:.1f}"
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            # AUD-03 (审计 2026-11): 原为 `except Exception: pass` —— 取历史价/DB 锁
+            # 任一失败, 四道追高检查整体消失且零痕迹, 调用方拿到 None 只会理解为
+            # 「检查通过」。违反 docs/ARCHITECTURE.md 1.1 宪法#1「诚实降级, 绝不静默」。
+            # 修法: 仍 fail-open (风控面不误杀), 但置显式降级标记 + warning 可见。
+            self._spike_defense_degraded = True
+            logger.warning(
+                f"Spike defense DEGRADED for {code}: {e} — "
+                f"追高防御本次未执行 (显式降级, 非放行判定)")
         return None
 
     def check_entry(self, code: str, current_price: float, current_time: str) -> EntryDecision | None:
         self._block_reason = None  # R3/D1: 每次调用重置, 不残留上一笔
         self._block_info = None
+        self._spike_defense_degraded = False  # AUD-03: 同上, 不残留上一笔
         pool = self.stock_pool.get(code)
         if not pool or pool["status"] != "pending_entry":
             return None
@@ -126,7 +161,18 @@ class EntryEngine:
         # Pre-execution constraint checks (G-E31)
         from execution_layer.core.constraint_checker import ConstraintChecker
         constraint_checker = ConstraintChecker(self.stock_pool, config=self.config)
-        constraint_result = constraint_checker.check_entry(code, current_price)
+        # AUD-02 (审计 2026-11): 旧实现只传 code+price, position_qty 落默认 100 股 ——
+        # 「余额不足」比的是 100 股的钱, 「单只仓位上限 20%」算的是 100×price/总权益,
+        # 常见价位下永远不越界, 两道闸在生产链路上形同装饰。先定本笔股数再校验。
+        plan_qty = self._plan_qty(constraint_checker, current_price)
+        if plan_qty is not None and plan_qty < 100:
+            reason = (f"资金不足: 可用现金+单只上限买不起一手 "
+                      f"(price={current_price}, plan_qty={plan_qty})")
+            logger.info(f"Entry sizing blocked {code}: {reason}")
+            self._stash_block("sizing", reason)
+            return None
+        constraint_result = constraint_checker.check_entry(
+            code, current_price, plan_qty if plan_qty is not None else 0)
         if not constraint_result.passed:
             logger.info(f"Entry constraints failed for {code}: {constraint_result.violations}")
             self._stash_block(
@@ -169,6 +215,7 @@ class EntryEngine:
                     action="buy", price=current_price,
                     reason=f"竞合时段触价: {current_price} (容差±0.2% 内, 目标 {entry_low})",
                     volume_suggestion="normal",
+                    qty=plan_qty or 0,
                 )
             return None
         elif "09:30" <= hour_min < "09:35":
@@ -177,6 +224,7 @@ class EntryEngine:
                     action="buy", price=current_price,
                     reason=f"强共振入场: {current_price}",
                     volume_suggestion="试探",
+                    qty=plan_qty or 0,
                 )
             return None
         elif "09:35" <= hour_min < "11:30" or "13:00" <= hour_min < "14:50":
@@ -185,6 +233,7 @@ class EntryEngine:
                     action="buy", price=current_price,
                     reason=f"触价: {current_price} 在区间 [{entry_low}, {entry_high}] 内",
                     volume_suggestion="normal",
+                    qty=plan_qty or 0,
                 )
             return None
         elif "14:50" <= hour_min <= "15:00":
@@ -194,6 +243,7 @@ class EntryEngine:
                     action="buy", price=current_price,
                     reason=f"尾盘积极入场: {current_price} (范围扩展至 {expanded_high:.2f})",
                     volume_suggestion="aggressive",
+                    qty=plan_qty or 0,
                 )
             return None
 
